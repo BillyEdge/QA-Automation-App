@@ -1,0 +1,225 @@
+{
+  "id": "login-and-stock-in",
+  "name": "login and stock in",
+  "description": "Test case recorded from web browser",
+  "platform": "web",
+  "actions": [
+    {
+      "id": "c1a45c29-91da-4f6d-adc9-28d3ea950f57",
+      "timestamp": 1759373420294,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/inventory/new/",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/inventory/new/",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\c1a45c29-91da-4f6d-adc9-28d3ea950f57.png"
+    },
+    {
+      "id": "914083aa-5969-4672-b8d6-a33a428ffa88",
+      "timestamp": 1759373421599,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/inventory/new/authentication?&",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/inventory/new/authentication?&",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\914083aa-5969-4672-b8d6-a33a428ffa88.png"
+    },
+    {
+      "id": "e0a3fdb4-027c-45f8-8741-cad6cabc1327",
+      "timestamp": 1759373421600,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/inventory/new/authentication?",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/inventory/new/authentication?",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\e0a3fdb4-027c-45f8-8741-cad6cabc1327.png"
+    },
+    {
+      "id": "8ffe1dd5-66c3-4c46-8324-aab9ebecd031",
+      "timestamp": 1759373422830,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/inventory/new/",
+      "description": "Navigate to https://t1.equipweb.biz/edgecafeinventory/inventory/new/",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\8ffe1dd5-66c3-4c46-8324-aab9ebecd031.png"
+    },
+    {
+      "id": "ec5f1856-811a-448e-84d5-d2183484ebe3",
+      "timestamp": 1759373424056,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/?path=login&requestid=c2813112-66e2-41c9-9f95-08a6fefda2f3",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/?path=login&requestid=c2813112-66e2-41c9-9f95-08a6fefda2f3",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\ec5f1856-811a-448e-84d5-d2183484ebe3.png"
+    },
+    {
+      "id": "67610923-a1e6-4690-8688-a2d87dc1879f",
+      "timestamp": 1759373424700,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/login?&path=login&requestid=c2813112-66e2-41c9-9f95-08a6fefda2f3",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/login?&path=login&requestid=c2813112-66e2-41c9-9f95-08a6fefda2f3",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\67610923-a1e6-4690-8688-a2d87dc1879f.png"
+    },
+    {
+      "id": "1f18920b-074b-4f98-a24c-797f6075876b",
+      "timestamp": 1759373424701,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/login",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/login",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\1f18920b-074b-4f98-a24c-797f6075876b.png"
+    },
+    {
+      "id": "d5681204-eed8-43f2-962c-ba8f68b4a624",
+      "timestamp": 1759373428611,
+      "platform": "web",
+      "type": "click",
+      "target": {
+        "type": "css",
+        "value": "[placeholder=\"Enter Username\"]",
+        "fallbacks": []
+      },
+      "description": "Click on input \"[placeholder=\"Enter Username\"]\"",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\d5681204-eed8-43f2-962c-ba8f68b4a624.png"
+    },
+    {
+      "id": "85bf64d3-2e77-4f86-9115-6b8182715bc0",
+      "timestamp": 1759373432999,
+      "platform": "web",
+      "type": "type",
+      "target": {
+        "type": "css",
+        "value": "[placeholder=\"Enter Username\"]",
+        "fallbacks": []
+      },
+      "value": "billy",
+      "description": "Type \"billy\" into Enter Username",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\85bf64d3-2e77-4f86-9115-6b8182715bc0.png"
+    },
+    {
+      "id": "9bc1c7f9-e24c-4435-a5f9-6ced633c1e06",
+      "timestamp": 1759373434954,
+      "platform": "web",
+      "type": "type",
+      "target": {
+        "type": "css",
+        "value": "[name=\"username\"]",
+        "fallbacks": []
+      },
+      "value": "billy@ew",
+      "description": "Type \"billy@ew\" into Enter Username",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\9bc1c7f9-e24c-4435-a5f9-6ced633c1e06.png"
+    },
+    {
+      "id": "8b9b63e5-e5e1-4aea-9c3f-c3c5b3ac2b6d",
+      "timestamp": 1759373442635,
+      "platform": "web",
+      "type": "click",
+      "target": {
+        "type": "css",
+        "value": "#id-password",
+        "fallbacks": []
+      },
+      "description": "Click on input \"#id-password\"",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\8b9b63e5-e5e1-4aea-9c3f-c3c5b3ac2b6d.png"
+    },
+    {
+      "id": "82ace2f2-5320-4335-ad9f-db42df5c3013",
+      "timestamp": 1759373445949,
+      "platform": "web",
+      "type": "type",
+      "target": {
+        "type": "css",
+        "value": "#id-password",
+        "fallbacks": []
+      },
+      "value": "1",
+      "description": "Type \"1\" into Enter Password",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\82ace2f2-5320-4335-ad9f-db42df5c3013.png"
+    },
+    {
+      "id": "03ec9209-a992-464c-9007-0097436c0800",
+      "timestamp": 1759373448451,
+      "platform": "web",
+      "type": "click",
+      "target": {
+        "type": "css",
+        "value": "button.btn.btn-block",
+        "fallbacks": []
+      },
+      "description": "Click on button \"Login\"",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\03ec9209-a992-464c-9007-0097436c0800.png"
+    },
+    {
+      "id": "dd3c9a41-a0a8-4f81-8ae9-bbc52a4e42cd",
+      "timestamp": 1759373448783,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/login",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/login",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\dd3c9a41-a0a8-4f81-8ae9-bbc52a4e42cd.png"
+    },
+    {
+      "id": "9975065b-cb95-4fff-84f0-a42fe3177130",
+      "timestamp": 1759373449762,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/?path=home",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/?path=home",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\9975065b-cb95-4fff-84f0-a42fe3177130.png"
+    },
+    {
+      "id": "fc376c68-6135-4d48-ad82-5f6a3b075c4e",
+      "timestamp": 1759373449795,
+      "platform": "web",
+      "type": "navigate",
+      "value": "https://t1.equipweb.biz/edgecafeinventory/setup/new/home",
+      "description": "Navigated to https://t1.equipweb.biz/edgecafeinventory/setup/new/home",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\fc376c68-6135-4d48-ad82-5f6a3b075c4e.png"
+    },
+    {
+      "id": "f481e174-1068-4f04-81fe-997350280596",
+      "timestamp": 1759373457123,
+      "platform": "web",
+      "type": "click",
+      "target": {
+        "type": "css",
+        "value": "span",
+        "fallbacks": []
+      },
+      "description": "Click on span \"billy@ew\"",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\f481e174-1068-4f04-81fe-997350280596.png"
+    },
+    {
+      "id": "58c4c8a6-2a74-401d-a762-8528adcb9721",
+      "timestamp": 1759373462019,
+      "platform": "web",
+      "type": "click",
+      "target": {
+        "type": "css",
+        "value": "span.text-sm",
+        "fallbacks": []
+      },
+      "description": "Click on span \"Inventory Portal\"",
+      "metadata": {},
+      "screenshot": "C:\\QA Automation\\tests\\screenshots\\58c4c8a6-2a74-401d-a762-8528adcb9721.png"
+    }
+  ],
+  "createdAt": 1759373462250,
+  "updatedAt": 1759373462250
+}

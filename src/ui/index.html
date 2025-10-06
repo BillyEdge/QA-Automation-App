@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QA Automation Platform</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #333;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    .container {
+      display: flex;
+      height: 100vh;
+    }
+
+    .sidebar {
+      width: 250px;
+      background: #2d3748;
+      color: white;
+      padding: 20px;
+      overflow-y: auto;
+    }
+
+    .sidebar h1 {
+      font-size: 20px;
+      margin-bottom: 30px;
+      color: #fff;
+    }
+
+    .nav-item {
+      padding: 12px 15px;
+      margin-bottom: 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.3s;
+      font-size: 14px;
+    }
+
+    .nav-item:hover {
+      background: #4a5568;
+    }
+
+    .nav-item.active {
+      background: #667eea;
+    }
+
+    .main-content {
+      flex: 1;
+      background: white;
+      margin: 20px;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+      overflow-y: auto;
+      padding: 30px;
+    }
+
+    .page {
+      display: none;
+    }
+
+    .page.active {
+      display: block;
+    }
+
+    h2 {
+      color: #2d3748;
+      margin-bottom: 20px;
+      font-size: 28px;
+    }
+
+    .card {
+      background: #f7fafc;
+      border-radius: 8px;
+      padding: 25px;
+      margin-bottom: 20px;
+      border: 1px solid #e2e8f0;
+    }
+
+    .card h3 {
+      color: #4a5568;
+      margin-bottom: 15px;
+      font-size: 18px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #4a5568;
+      font-weight: 500;
+      font-size: 14px;
+    }
+
+    input, select, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+      transition: border-color 0.3s;
+    }
+
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    button {
+      background: #667eea;
+      color: white;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.3s;
+      margin-right: 10px;
+    }
+
+    button:hover {
+      background: #5568d3;
+    }
+
+    button.secondary {
+      background: #718096;
+    }
+
+    button.secondary:hover {
+      background: #4a5568;
+    }
+
+    button.danger {
+      background: #f56565;
+    }
+
+    button.danger:hover {
+      background: #e53e3e;
+    }
+
+    .status {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-block;
+      margin-left: 10px;
+    }
+
+    .status.recording {
+      background: #fc8181;
+      color: #742a2a;
+    }
+
+    .status.idle {
+      background: #9ae6b4;
+      color: #22543d;
+    }
+
+    .platform-selector {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+
+    .platform-card {
+      background: white;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 20px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .platform-card:hover {
+      border-color: #667eea;
+      transform: translateY(-2px);
+    }
+
+    .platform-card.selected {
+      border-color: #667eea;
+      background: #eef2ff;
+    }
+
+    .platform-icon {
+      font-size: 48px;
+      margin-bottom: 10px;
+    }
+
+    .test-list {
+      list-style: none;
+    }
+
+    .test-item {
+      background: white;
+      padding: 15px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      border: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .test-item:hover {
+      border-color: #667eea;
+    }
+
+    .badge {
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .badge.web {
+      background: #bee3f8;
+      color: #2c5282;
+    }
+
+    .badge.desktop {
+      background: #fbd38d;
+      color: #744210;
+    }
+
+    .badge.mobile {
+      background: #c6f6d5;
+      color: #22543d;
+    }
+
+    .log-output {
+      background: #1a202c;
+      color: #68d391;
+      padding: 15px;
+      border-radius: 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+      margin-top: 15px;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <h1>🤖 QA Automation</h1>
+      <div class="nav-item active" onclick="showPage('recorder')">
+        🎬 Recorder
+      </div>
+      <div class="nav-item" onclick="showPage('executor')">
+        ▶️ Test Executor
+      </div>
+      <div class="nav-item" onclick="showPage('tests')">
+        📝 Test Cases
+      </div>
+      <div class="nav-item" onclick="showPage('reports')">
+        📊 Reports
+      </div>
+      <div class="nav-item" onclick="showPage('settings')">
+        ⚙️ Settings
+      </div>
+    </div>
+
+    <div class="main-content">
+      <!-- Recorder Page -->
+      <div id="recorder" class="page active">
+        <h2>Test Recorder <span id="recorder-status" class="status idle">Idle</span></h2>
+
+        <div class="platform-selector">
+          <div class="platform-card selected" onclick="selectPlatform('web')">
+            <div class="platform-icon">🌐</div>
+            <h4>Web</h4>
+            <p>Browser Automation</p>
+          </div>
+          <div class="platform-card" onclick="selectPlatform('desktop')">
+            <div class="platform-icon">🖥️</div>
+            <h4>Desktop</h4>
+            <p>Windows/Mac/Linux</p>
+          </div>
+          <div class="platform-card" onclick="selectPlatform('mobile')">
+            <div class="platform-icon">📱</div>
+            <h4>Mobile</h4>
+            <p>Android/iOS</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Recording Configuration</h3>
+
+          <div id="web-config">
+            <div class="form-group">
+              <label>Start URL</label>
+              <input type="text" id="web-url" placeholder="https://example.com" value="https://example.com">
+            </div>
+            <div class="form-group">
+              <label>Browser</label>
+              <select id="web-browser">
+                <option value="chromium">Chrome/Chromium</option>
+                <option value="firefox">Firefox</option>
+                <option value="webkit">Safari (WebKit)</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="desktop-config" class="hidden">
+            <div class="form-group">
+              <label>Application Path (Optional)</label>
+              <input type="text" id="desktop-app-path" placeholder="C:\Path\To\Application.exe">
+            </div>
+          </div>
+
+          <div id="mobile-config" class="hidden">
+            <div class="form-group">
+              <label>Device Type</label>
+              <select id="mobile-device-type">
+                <option value="android">Android</option>
+                <option value="ios">iOS</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>App Package (Android) / Bundle ID (iOS)</label>
+              <input type="text" id="mobile-app-id" placeholder="com.example.app">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Output Directory</label>
+            <input type="text" id="output-path" value="./recordings">
+          </div>
+
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="screenshot-enabled" checked>
+              Capture screenshots on each action
+            </label>
+          </div>
+
+          <button id="start-btn" onclick="startRecording()">🎬 Start Recording</button>
+          <button id="stop-btn" onclick="stopRecording()" class="danger hidden">⏹️ Stop Recording</button>
+        </div>
+
+        <div class="log-output" id="recorder-log">
+          Recorder ready. Select platform and click "Start Recording"...
+        </div>
+      </div>
+
+      <!-- Test Executor Page -->
+      <div id="executor" class="page">
+        <h2>Test Executor</h2>
+
+        <div class="card">
+          <h3>Execute Test Cases</h3>
+          <div class="form-group">
+            <label>Test Case File</label>
+            <input type="text" id="test-file-path" placeholder="./recordings/test-case-id.json">
+          </div>
+          <button onclick="executeTest()">▶️ Execute Test</button>
+          <button onclick="executeBatch()" class="secondary">▶️ Execute Batch</button>
+        </div>
+
+        <div class="log-output" id="executor-log">
+          Ready to execute tests...
+        </div>
+      </div>
+
+      <!-- Test Cases Page -->
+      <div id="tests" class="page">
+        <h2>Test Cases</h2>
+        <div class="card">
+          <ul class="test-list" id="test-list">
+            <li class="test-item">
+              <div>
+                <strong>Sample Web Test</strong>
+                <span class="badge web">web</span>
+                <br>
+                <small>Created: 2024-01-15 | 12 actions</small>
+              </div>
+              <div>
+                <button class="secondary">▶️ Run</button>
+                <button class="secondary">✏️ Edit</button>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Reports Page -->
+      <div id="reports" class="page">
+        <h2>Test Reports</h2>
+        <div class="card">
+          <h3>Recent Execution Results</h3>
+          <p>No reports available yet. Execute some tests to see results here.</p>
+        </div>
+      </div>
+
+      <!-- Settings Page -->
+      <div id="settings" class="page">
+        <h2>Settings</h2>
+        <div class="card">
+          <h3>General Settings</h3>
+          <div class="form-group">
+            <label>Default Output Directory</label>
+            <input type="text" value="./recordings">
+          </div>
+          <div class="form-group">
+            <label>Appium Server URL</label>
+            <input type="text" value="http://localhost:4723">
+          </div>
+          <button>💾 Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    let selectedPlatform = 'web';
+
+    function showPage(pageId) {
+      document.querySelectorAll('.page').forEach(page => page.classList.remove('active'));
+      document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+      document.getElementById(pageId).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    function selectPlatform(platform) {
+      selectedPlatform = platform;
+      document.querySelectorAll('.platform-card').forEach(card => card.classList.remove('selected'));
+      event.target.closest('.platform-card').classList.add('selected');
+
+      // Show/hide platform-specific configs
+      document.getElementById('web-config').classList.toggle('hidden', platform !== 'web');
+      document.getElementById('desktop-config').classList.toggle('hidden', platform !== 'desktop');
+      document.getElementById('mobile-config').classList.toggle('hidden', platform !== 'mobile');
+    }
+
+    async function startRecording() {
+      const config = {
+        outputPath: document.getElementById('output-path').value,
+        screenshotOnAction: document.getElementById('screenshot-enabled').checked
+      };
+
+      let result;
+      if (selectedPlatform === 'web') {
+        config.startUrl = document.getElementById('web-url').value;
+        config.browser = document.getElementById('web-browser').value;
+        result = await ipcRenderer.invoke('start-web-recording', config);
+      } else if (selectedPlatform === 'desktop') {
+        result = await ipcRenderer.invoke('start-desktop-recording', config);
+      } else if (selectedPlatform === 'mobile') {
+        config.deviceType = document.getElementById('mobile-device-type').value;
+        config.appPackage = document.getElementById('mobile-app-id').value;
+        result = await ipcRenderer.invoke('start-mobile-recording', config);
+      }
+
+      if (result.success) {
+        document.getElementById('recorder-status').textContent = 'Recording';
+        document.getElementById('recorder-status').className = 'status recording';
+        document.getElementById('start-btn').classList.add('hidden');
+        document.getElementById('stop-btn').classList.remove('hidden');
+        addLog('recorder-log', '✅ Recording started successfully');
+      } else {
+        addLog('recorder-log', `❌ Error: ${result.error}`);
+      }
+    }
+
+    async function stopRecording() {
+      const result = await ipcRenderer.invoke('stop-recording');
+
+      if (result.success) {
+        document.getElementById('recorder-status').textContent = 'Idle';
+        document.getElementById('recorder-status').className = 'status idle';
+        document.getElementById('start-btn').classList.remove('hidden');
+        document.getElementById('stop-btn').classList.add('hidden');
+        addLog('recorder-log', `✅ Recording stopped. Test case saved: ${result.testCase.id}`);
+      } else {
+        addLog('recorder-log', `❌ Error: ${result.error}`);
+      }
+    }
+
+    async function executeTest() {
+      const filePath = document.getElementById('test-file-path').value;
+      addLog('executor-log', `🚀 Executing test: ${filePath}`);
+
+      const result = await ipcRenderer.invoke('execute-test', filePath);
+
+      if (result.success) {
+        addLog('executor-log', `✅ Test ${result.result.status}: Duration ${result.result.duration}ms`);
+      } else {
+        addLog('executor-log', `❌ Error: ${result.error}`);
+      }
+    }
+
+    function addLog(elementId, message) {
+      const logElement = document.getElementById(elementId);
+      const timestamp = new Date().toLocaleTimeString();
+      logElement.innerHTML += `\n[${timestamp}] ${message}`;
+      logElement.scrollTop = logElement.scrollHeight;
+    }
+  </script>
+</body>
+</html>

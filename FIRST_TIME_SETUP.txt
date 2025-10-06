@@ -1,0 +1,53 @@
+╔══════════════════════════════════════════════════════════╗
+║         QA AUTOMATION PLATFORM - FIRST TIME SETUP       ║
+╚══════════════════════════════════════════════════════════╝
+
+IMPORTANT: Run this ONE TIME before using the application!
+
+✅ Playwright browsers have been installed successfully!
+
+Location: C:\Users\Billy\AppData\Local\ms-playwright\
+
+Installed Browsers:
+- Chromium 140.0.7339.186
+- FFMPEG (for video recording)
+- Chromium Headless Shell
+
+═══════════════════════════════════════════════════════════
+
+📋 HOW TO USE:
+
+1. Double-click QAAutomationUI.exe
+2. Create or select a test suite
+3. Start recording tests!
+
+═══════════════════════════════════════════════════════════
+
+🎬 RECORDING TESTS:
+   - Click "Start Recording"
+   - Browser will open automatically
+   - Interact with your website
+   - All actions are recorded automatically
+   - Click "Stop Recording" when done
+
+▶️ EXECUTING TESTS:
+   - Select a test from the dropdown
+   - Click "Execute Test"
+   - View results in the console
+   - Click "View Reports" to see HTML reports
+
+═══════════════════════════════════════════════════════════
+
+💡 TROUBLESHOOTING:
+
+If browser doesn't open:
+  Run: npx playwright install chromium
+
+If tests fail:
+  - Check console output for errors
+  - Make sure URL is accessible
+  - Ensure test file exists in tests/ folder
+
+═══════════════════════════════════════════════════════════
+
+✨ You're all set! Start testing! ✨

@@ -27,6 +27,7 @@ program
   .option('-o, --output <path>', 'Output directory', './recordings')
   .option('-n, --name <name>', 'Test case name', 'Recorded Web Test')
   .option('--no-screenshots', 'Disable screenshots on each action')
+  .option('--continue', 'Continue existing test (append new actions)')
   .action(async (options) => {
     const recorder = new WebRecorder({
       platform: PlatformType.WEB,
@@ -34,7 +35,8 @@ program
       startUrl: options.url,
       browser: options.browser as any,
       screenshotOnAction: options.screenshots,
-      testName: options.name
+      testName: options.name,
+      continueExisting: options.continue
     });
 
     await recorder.start();
@@ -121,6 +123,42 @@ program
     });
   });
 
+// Element Picker Command
+program
+  .command('pick-element')
+  .description('Pick an element from the active browser session')
+  .action(async () => {
+    // This assumes browser is already open from a recording session
+    const { browserManager } = await import('./browser/browserManager');
+
+    if (!browserManager.isBrowserOpen()) {
+      console.error('❌ No browser session found. Please start a recording first.');
+      process.exit(1);
+    }
+
+    // Create a temporary recorder instance to use the pickElement method
+    const tempRecorder = new WebRecorder({
+      platform: PlatformType.WEB,
+      outputPath: './temp',
+      startUrl: '',
+      testName: 'temp'
+    });
+
+    // Set the page from browser manager
+    const page = await browserManager.getPage();
+    (tempRecorder as any).page = page;
+
+    const selector = await tempRecorder.pickElement();
+
+    if (selector) {
+      console.log(`\n✅ Selected element: ${selector}`);
+      // Output just the selector so parent process can capture it
+      console.log(`SELECTED_ELEMENT:${selector}`);
+    } else {
+      console.log('\n❌ Element selection cancelled');
+    }
+  });
+
 // Unified Cross-Platform Recording Command (Like Ranorex)
 program
   .command('record:unified')
@@ -156,10 +194,23 @@ program
         executor.generateReport(options.report);
       }
 
-      process.exit(result.status === 'passed' ? 0 : 1);
+      // Signal completion without exiting (to keep browser alive)
+      console.log('###EXECUTION_COMPLETE###');
+      console.log(`EXIT_CODE:${result.status === 'passed' ? 0 : 1}`);
+
+      // Keep process alive to preserve browser session
+      console.log('🌐 Keeping process alive to preserve browser session...');
+      // Prevent Node.js from exiting by keeping event loop active
+      setInterval(() => {}, 60000); // Keep-alive timer every 60 seconds
+
     } catch (error: any) {
       console.error('❌ Execution failed:', error.message);
-      process.exit(1);
+      console.log('###EXECUTION_COMPLETE###');
+      console.log('EXIT_CODE:1');
+
+      // Keep process alive even on error
+      console.log('🌐 Keeping process alive to preserve browser session...');
+      setInterval(() => {}, 60000);
     }
   });
 

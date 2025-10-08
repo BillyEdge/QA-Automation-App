@@ -33,6 +33,7 @@ videos/
 
 # Generated files
 object-repository.json
+.browser-cdp-endpoint
 
 # Environment variables
 .env

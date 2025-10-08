@@ -2,7 +2,11 @@
   "name": "Inventory",
   "description": "",
   "platform": "web",
-  "tests": [],
+  "urlOrPath": "https://t1.equipweb.biz/edgecafeinventory/inventory/new/",
+  "testCases": [
+    "test-suites/inventory/tests/login.json",
+    "test-suites/inventory/tests/test-1759475072423.json"
+  ],
   "createdAt": "2025-10-02T10:42:27.4729354+08:00",
   "updatedAt": "2025-10-02T10:42:27.4729363+08:00"
 }

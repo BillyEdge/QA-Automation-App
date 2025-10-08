@@ -13,6 +13,7 @@ export enum ActionType {
   HOVER = 'hover',
   NAVIGATE = 'navigate',
   WAIT = 'wait',
+  WAIT_FOR_ELEMENT = 'wait_for_element',
   ASSERT = 'assert',
   SCREENSHOT = 'screenshot',
   DRAG_DROP = 'drag_drop',
@@ -71,6 +72,8 @@ export interface StepResult {
   duration: number;
   error?: string;
   screenshot?: string;
+  action?: string;  // Action type (click, type, etc.)
+  object?: string;  // Object/element description
 }
 
 export interface RecorderConfig {
@@ -86,6 +89,7 @@ export interface WebRecorderConfig extends RecorderConfig {
   headless?: boolean;
   startUrl?: string;
   testName?: string;
+  continueExisting?: boolean;
 }
 
 export interface DesktopRecorderConfig extends RecorderConfig {

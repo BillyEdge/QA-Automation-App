@@ -3,11 +3,11 @@ import { remote } from 'webdriverio';
 import type { Browser } from 'webdriverio';
 import { mouse, keyboard, screen } from '@nut-tree-fork/nut-js';
 import { TestCase, TestAction, ExecutionResult, StepResult, ActionType, PlatformType } from '../types';
+import { browserManager } from '../browser/browserManager';
 import * as fs from 'fs';
 import * as path from 'path';
 
 export class TestExecutor {
-  private webBrowser: PlaywrightBrowser | null = null;
   private mobileBrowser: Browser | null = null;
   private results: ExecutionResult[] = [];
 
@@ -50,7 +50,9 @@ export class TestExecutor {
           actionId: action.id,
           status: stepStatus,
           duration: Date.now() - stepStartTime,
-          error: stepError
+          error: stepError,
+          action: action.type,
+          object: action.target?.value || action.value || ''
         });
 
         if (hasError) break; // Stop execution on first error
@@ -120,35 +122,51 @@ export class TestExecutor {
   private async executeWebAction(action: TestAction): Promise<void> {
     // Handle CUSTOM actions (start_browser, close_browser)
     if (action.type === ActionType.CUSTOM) {
-      if (action.value === 'start_browser') {
-        if (!this.webBrowser) {
-          console.log('   🌐 Starting browser...');
-          this.webBrowser = await chromium.launch({
-            headless: false,
-            args: ['--start-maximized']
-          });
-        } else {
+      // Check value OR description for start_browser (backward compatibility)
+      const isStartBrowser = action.value === 'start_browser' ||
+                            action.description?.includes('Start Browser');
+
+      if (isStartBrowser) {
+        if (browserManager.isBrowserOpen()) {
           console.log('   ✨ Browser already open - reusing existing session');
+        } else {
+          console.log('   🌐 Starting browser...');
+          await browserManager.getBrowser();
+          await browserManager.getContext();
+          await browserManager.getPage();
         }
+
+        // If value is a URL (not "start_browser"), navigate to it
+        if (action.value && action.value !== 'start_browser' && action.value.startsWith('http')) {
+          console.log(`   🔄 Navigating to ${action.value}`);
+          const page = await browserManager.getPage();
+          if (page) {
+            await page.goto(action.value);
+            await page.waitForLoadState('domcontentloaded');
+          }
+        }
+
         return;
       } else if (action.value === 'close_browser') {
-        console.log('   🔴 Closing browser...');
-        if (this.webBrowser) {
-          await this.webBrowser.close();
-          this.webBrowser = null;
-        }
+        await browserManager.closeBrowser();
         return;
       }
     }
 
-    if (!this.webBrowser) throw new Error('Web browser not initialized');
-
-    const context = this.webBrowser.contexts()[0] || await this.webBrowser.newContext();
-    const pages = context.pages();
-    const page = pages.length > 0 ? pages[0] : await context.newPage();
+    // Get page from browser manager
+    const page = await browserManager.getPage();
+    if (!page) {
+      throw new Error('Web browser not initialized');
+    }
 
     switch (action.type) {
       case ActionType.NAVIGATE:
+        // Skip navigation if value is empty (tab switch marker)
+        if (!action.value || action.value.trim() === '') {
+          console.log(`   📑 Tab switch detected - skipping navigation`);
+          break;
+        }
+
         const currentUrl = page.url();
         if (currentUrl === action.value) {
           console.log(`   ✅ Already at ${currentUrl} - skipping navigation`);
@@ -160,26 +178,36 @@ export class TestExecutor {
 
       case ActionType.CLICK:
         if (action.target) {
-          const element = await page.locator(action.target.value);
-          await element.click();
+          const locator = this.getLocator(page, action.target);
+          await locator.click();
         }
         break;
 
       case ActionType.TYPE:
         if (action.target) {
-          const element = await page.locator(action.target.value);
-          await element.fill(action.value);
+          const locator = this.getLocator(page, action.target);
+          await locator.fill(action.value);
         }
         break;
 
       case ActionType.WAIT:
-        await page.waitForTimeout(action.value);
+        await page.waitForTimeout(parseInt(action.value));
+        break;
+
+      case ActionType.WAIT_FOR_ELEMENT:
+        if (action.value) {
+          console.log(`   ⏳ Waiting for element: ${action.value}`);
+          await page.waitForSelector(action.value, {
+            state: 'visible',
+            timeout: 30000  // 30 second timeout
+          });
+        }
         break;
 
       case ActionType.ASSERT:
         if (action.target && action.value) {
-          const element = await page.locator(action.target.value);
-          const actualValue = await element.textContent();
+          const locator = this.getLocator(page, action.target);
+          const actualValue = await locator.textContent();
           if (actualValue !== action.value.expectedValue) {
             throw new Error(`Assertion failed: expected "${action.value.expectedValue}", got "${actualValue}"`);
           }
@@ -192,20 +220,32 @@ export class TestExecutor {
 
       case ActionType.HOVER:
         if (action.target) {
-          const element = await page.locator(action.target.value);
-          await element.hover();
+          const locator = this.getLocator(page, action.target);
+          await locator.hover();
         }
         break;
 
       case ActionType.SELECT:
         if (action.target) {
-          const element = await page.locator(action.target.value);
-          await element.selectOption(action.value);
+          const locator = this.getLocator(page, action.target);
+          await locator.selectOption(action.value);
         }
         break;
 
       default:
         console.warn(`Unsupported web action type: ${action.type}`);
+    }
+  }
+
+  private getLocator(page: any, target: any) {
+    // Prefer XPath for better text-based matching (dropdowns, menus, etc.)
+    // Fallback to CSS selector if XPath fails
+    if (target.type === 'xpath') {
+      console.log(`   🎯 Using XPath locator: ${target.value}`);
+      return page.locator(`xpath=${target.value}`);
+    } else {
+      console.log(`   🎯 Using CSS locator: ${target.value}`);
+      return page.locator(target.value);
     }
   }
 

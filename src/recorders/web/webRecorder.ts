@@ -1,6 +1,7 @@
 import { chromium, Browser, Page, BrowserContext } from 'playwright';
 import { v4 as uuidv4 } from 'uuid';
 import { TestAction, TestCase, ActionType, PlatformType, WebRecorderConfig, ElementLocator } from '../../types';
+import { browserManager } from '../../browser/browserManager';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,14 +21,14 @@ interface ObjectRepositoryItem {
 }
 
 export class WebRecorder {
-  private browser: Browser | null = null;
-  private context: BrowserContext | null = null;
   private page: Page | null = null;
   private actions: TestAction[] = [];
   private config: WebRecorderConfig;
   private recording: boolean = false;
   private testCaseId: string;
   private objectRepository: Map<string, ObjectRepositoryItem> = new Map();
+  private lastNavigationTime: number = 0;
+  private navigationDebounceMs: number = 500;
 
   constructor(config: WebRecorderConfig) {
     this.config = {
@@ -51,11 +52,43 @@ export class WebRecorder {
   async start(url?: string): Promise<void> {
     console.log('🎬 Starting Web Recorder...');
 
-    // Check if browser is already open (from previous recording)
-    const browserAlreadyOpen = this.browser !== null && this.page !== null;
+    // If continuing existing test, load existing actions
+    if (this.config.continueExisting) {
+      const testFilePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
+      if (fs.existsSync(testFilePath)) {
+        console.log(`📂 Loading existing test from ${testFilePath}`);
+        const existingTest = JSON.parse(fs.readFileSync(testFilePath, 'utf-8'));
+        this.actions = existingTest.actions || [];
+        console.log(`✅ Loaded ${this.actions.length} existing actions - new actions will be appended`);
+      } else {
+        console.log(`⚠️ Continue flag set but no existing test found at ${testFilePath} - starting fresh`);
+      }
+    }
+
+    // Enable recording EARLY so Start Browser action gets saved
+    this.recording = true;
+
+    // Check if browser is already open (from test execution or previous recording)
+    const browserAlreadyOpen = browserManager.isBrowserOpen();
+    console.log(`🔍 Browser already open check: ${browserAlreadyOpen}`);
+
+    // For NEW tests (not continuing), always add Start Browser action
+    if (!this.config.continueExisting) {
+      await this.addAction({
+        type: ActionType.CUSTOM,
+        value: 'start_browser',
+        description: '🌐 Start Browser - Open Chromium'
+      });
+    }
 
     if (browserAlreadyOpen) {
       console.log('✨ Browser already open - reusing existing session');
+      this.page = await browserManager.getPage();
+
+      // Set up event listeners BEFORE any navigation (must be done even if browser is already open)
+      console.log('🎧 Setting up event listeners...');
+      await this.setupEventListeners();
+      console.log('✅ Event listeners set up');
 
       // Get current URL
       const currentUrl = this.page!.url();
@@ -66,43 +99,40 @@ export class WebRecorder {
         console.log(`🔄 Navigating from ${currentUrl} to ${targetUrl}`);
         await this.page!.goto(targetUrl);
         await this.page!.waitForLoadState('domcontentloaded');
+      } else {
+        console.log(`✅ Already at ${currentUrl} - continuing from current page`);
+      }
 
+      // For NEW tests, record the initial navigation so test knows where to start
+      if (!this.config.continueExisting && targetUrl) {
         this.addAction({
           type: ActionType.NAVIGATE,
           value: targetUrl,
           description: `Navigate to ${targetUrl}`
         });
-      } else {
-        console.log(`✅ Already at ${currentUrl} - continuing from current page`);
       }
+
+      // Inject event listeners AFTER navigation check
+      console.log('💉 Injecting event listeners...');
+      await this.injectEventListeners();
+      console.log('✅ Event listeners injected');
     } else {
       // Browser not open - start fresh
       console.log('🌐 Opening new browser session');
 
-      // Add "Start Browser" action as first step (like Ranorex)
-      this.addAction({
-        type: ActionType.CUSTOM,
-        value: 'start_browser',
-        description: '🌐 Start Browser - Open Chromium'
-      });
+      // Start Browser action already added above (line 74-78)
 
-      // Launch browser
-      this.browser = await chromium.launch({
-        headless: this.config.headless,
-        args: ['--start-maximized']
-      });
-
-      this.context = await this.browser.newContext({
-        viewport: null,
-        recordVideo: this.config.outputPath ? {
-          dir: path.join(this.config.outputPath, 'videos')
-        } : undefined
-      });
-
-      this.page = await this.context.newPage();
+      // Get browser from shared manager
+      console.log('🔧 Getting browser from browserManager...');
+      await browserManager.getBrowser();
+      const context = await browserManager.getContext();
+      this.page = await browserManager.getPage();
+      console.log('✅ Got page from browserManager');
 
       // Set up event listeners BEFORE any navigation
+      console.log('🎧 Setting up event listeners...');
       await this.setupEventListeners();
+      console.log('✅ Event listeners set up');
 
       // Navigate to start URL if provided
       if (url || this.config.startUrl) {
@@ -112,6 +142,7 @@ export class WebRecorder {
         // Wait for page to load
         await this.page.waitForLoadState('domcontentloaded');
 
+        // Record INITIAL navigation only (so test knows where to start)
         this.addAction({
           type: ActionType.NAVIGATE,
           value: targetUrl,
@@ -120,13 +151,17 @@ export class WebRecorder {
       }
 
       // Inject event listeners AFTER navigation (so page is loaded)
+      console.log('💉 Injecting event listeners...');
       await this.injectEventListeners();
+      console.log('✅ Event listeners injected');
     }
 
-    this.recording = true;
+    // Recording already enabled above (line 69)
 
     // Inject recorder script
+    console.log('📝 Injecting recorder script and overlay...');
     await this.injectRecorderScript();
+    console.log('✅ Recorder script and overlay injected');
 
     console.log('✅ Web Recorder started. Perform actions in the browser...');
     console.log('💡 Press Ctrl+C in terminal to stop recording');
@@ -240,7 +275,7 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.CLICK,
-        target: await this.createLocator(objectData.selector),
+        target: await this.createLocator(objectData.selector, objectData.xpath),
         description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
         objectId: objectId
       });
@@ -254,29 +289,52 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.TYPE,
-        target: await this.createLocator(objectData.selector),
+        target: await this.createLocator(objectData.selector, objectData.xpath),
         value: value,
         description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
         objectId: objectId
       });
     });
 
-    // Listen for navigation
-    this.page.on('framenavigated', async (frame) => {
-      if (frame === this.page?.mainFrame()) {
-        const url = frame.url();
-        await this.addAction({
-          type: ActionType.NAVIGATE,
-          value: url,
-          description: `Navigated to ${url}`
-        });
-      }
+    // Listen for dialogs (alerts, confirms, prompts)
+    this.page.on('dialog', async (dialog) => {
+      console.log(`🔔 Dialog detected: ${dialog.type()} - ${dialog.message()}`);
+      await this.addAction({
+        type: ActionType.CUSTOM,
+        value: `dialog_${dialog.type()}`,
+        description: `Dialog ${dialog.type()}: "${dialog.message()}"`
+      });
+      // Auto-accept dialogs during recording
+      await dialog.accept();
     });
 
+    // Listen for navigation - DISABLED to avoid recording automatic redirects
+    // this.page.on('framenavigated', async (frame) => {
+    //   if (frame === this.page?.mainFrame()) {
+    //     const url = frame.url();
+    //     const now = Date.now();
+
+    //     // Skip if this navigation happened too soon after the last one (likely an automatic redirect)
+    //     if (now - this.lastNavigationTime < this.navigationDebounceMs) {
+    //       console.log(`⏭️ Skipping navigation to ${url} (automatic redirect within ${now - this.lastNavigationTime}ms)`);
+    //       this.lastNavigationTime = now;
+    //       return;
+    //     }
+
+    //     this.lastNavigationTime = now;
+    //     await this.addAction({
+    //       type: ActionType.NAVIGATE,
+    //       value: url,
+    //       description: `Navigated to ${url}`
+    //     });
+    //   }
+    // });
+
     // Listen for new pages/tabs
-    if (this.context) {
-      this.context.on('page', async (newPage) => {
-        const pages = this.context?.pages() || [];
+    const context = browserManager.getContextInstance();
+    if (context) {
+      context.on('page', async (newPage) => {
+        const pages = context?.pages() || [];
         const pageIndex = pages.indexOf(newPage) + 1;
 
         console.log(`📑 New tab opened (#${pageIndex})`);
@@ -289,21 +347,71 @@ export class WebRecorder {
         // Switch tracking to the new page
         this.page = newPage;
 
+        // Wait for new page to load before injecting
+        try {
+          console.log(`⏳ Waiting for tab #${pageIndex} to load...`);
+          await newPage.waitForLoadState('domcontentloaded', { timeout: 10000 });
+          console.log(`✅ Tab #${pageIndex} loaded`);
+        } catch (e) {
+          console.log(`⚠️ Tab #${pageIndex} load timeout - injecting anyway`);
+        }
+
+        // Re-setup event listeners (exposeFunction must be called for new page)
+        console.log(`🎧 Setting up event listeners for tab #${pageIndex}...`);
+        await newPage.exposeFunction('recordClick', async (objectData: any) => {
+          console.log(`🖱️ Click recorded in tab #${pageIndex}: ${objectData.tagName} - ${objectData.text || objectData.selector}`);
+
+          const objectId = this.storeObject(objectData);
+
+          await this.addAction({
+            type: ActionType.CLICK,
+            target: await this.createLocator(objectData.selector, objectData.xpath),
+            description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
+            objectId: objectId
+          });
+        });
+
+        await newPage.exposeFunction('recordInput', async (objectData: any, value: string) => {
+          console.log(`⌨️ Input recorded in tab #${pageIndex}: ${value} into ${objectData.selector}`);
+
+          const objectId = this.storeObject(objectData);
+
+          await this.addAction({
+            type: ActionType.TYPE,
+            target: await this.createLocator(objectData.selector, objectData.xpath),
+            value: value,
+            description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
+            objectId: objectId
+          });
+        });
+
         // Re-inject recorder overlay and event listeners
+        console.log(`💉 Injecting event listeners for tab #${pageIndex}...`);
         await this.injectRecorderScript();
         await this.injectEventListeners();
+        console.log(`✅ Tab #${pageIndex} ready for recording`);
 
-        // Listen to this new page's navigation
-        newPage.on('framenavigated', async (frame) => {
-          if (frame === newPage.mainFrame()) {
-            const url = frame.url();
-            await this.addAction({
-              type: ActionType.NAVIGATE,
-              value: url,
-              description: `Navigated to ${url} (Tab #${pageIndex})`
-            });
-          }
-        });
+        // Navigation tracking disabled to avoid recording automatic redirects
+        // newPage.on('framenavigated', async (frame) => {
+        //   if (frame === newPage.mainFrame()) {
+        //     const url = frame.url();
+        //     const now = Date.now();
+
+        //     // Skip if this navigation happened too soon after the last one (likely an automatic redirect)
+        //     if (now - this.lastNavigationTime < this.navigationDebounceMs) {
+        //       console.log(`⏭️ Skipping navigation to ${url} in Tab #${pageIndex} (automatic redirect within ${now - this.lastNavigationTime}ms)`);
+        //       this.lastNavigationTime = now;
+        //       return;
+        //     }
+
+        //     this.lastNavigationTime = now;
+        //     await this.addAction({
+        //       type: ActionType.NAVIGATE,
+        //       value: url,
+        //       description: `Navigated to ${url} (Tab #${pageIndex})`
+        //     });
+        //   }
+        // });
       });
     }
   }
@@ -331,35 +439,82 @@ export class WebRecorder {
               attributes[attr.name] = attr.value;
             }
 
+            var text = element.textContent ? element.textContent.trim() : '';
             var selector = '';
-            // Try ID first
-            if (element.id) selector = '#' + element.id;
+            var xpath = '';
+
+            // Try ID first (most stable)
+            if (element.id) {
+              selector = '#' + element.id;
+              xpath = '//' + element.tagName.toLowerCase() + '[@id="' + element.id + '"]';
+            }
             // Try name attribute
-            else if (element.getAttribute('name')) selector = '[name="' + element.getAttribute('name') + '"]';
+            else if (element.getAttribute('name')) {
+              selector = '[name="' + element.getAttribute('name') + '"]';
+              xpath = '//' + element.tagName.toLowerCase() + '[@name="' + element.getAttribute('name') + '"]';
+            }
             // Try placeholder
-            else if (element.getAttribute('placeholder')) selector = '[placeholder="' + element.getAttribute('placeholder') + '"]';
+            else if (element.getAttribute('placeholder')) {
+              selector = '[placeholder="' + element.getAttribute('placeholder') + '"]';
+              xpath = '//' + element.tagName.toLowerCase() + '[@placeholder="' + element.getAttribute('placeholder') + '"]';
+            }
             // Try aria-label
-            else if (element.getAttribute('aria-label')) selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
-            // Try class
+            else if (element.getAttribute('aria-label')) {
+              selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
+              xpath = '//' + element.tagName.toLowerCase() + '[@aria-label="' + element.getAttribute('aria-label') + '"]';
+            }
+            // Try data-testid or data-test
+            else if (element.getAttribute('data-testid')) {
+              selector = '[data-testid="' + element.getAttribute('data-testid') + '"]';
+              xpath = '//' + element.tagName.toLowerCase() + '[@data-testid="' + element.getAttribute('data-testid') + '"]';
+            }
+            else if (element.getAttribute('data-test')) {
+              selector = '[data-test="' + element.getAttribute('data-test') + '"]';
+              xpath = '//' + element.tagName.toLowerCase() + '[@data-test="' + element.getAttribute('data-test') + '"]';
+            }
+            // If element has text content and generic class, use text-based selector
+            else if (text && text.length > 0 && text.length < 50) {
+              // Use XPath with text for better accuracy
+              var textEscaped = text.replace(/'/g, "\\'");
+              xpath = '//' + element.tagName.toLowerCase() + '[normalize-space(text())="' + textEscaped + '"]';
+
+              // For CSS, combine class with text hint (executor will use XPath primarily)
+              if (element.className && typeof element.className === 'string') {
+                var classes = element.className.split(' ').filter(function(c) { return c && !c.startsWith('_'); }).slice(0, 2).join('.');
+                if (classes) selector = element.tagName.toLowerCase() + '.' + classes;
+                else selector = element.tagName.toLowerCase();
+              } else {
+                selector = element.tagName.toLowerCase();
+              }
+            }
+            // Try class as last resort
             else if (element.className && typeof element.className === 'string') {
               var classes = element.className.split(' ').filter(function(c) { return c && !c.startsWith('_'); }).slice(0, 2).join('.');
-              if (classes) selector = element.tagName.toLowerCase() + '.' + classes;
-              else selector = element.tagName.toLowerCase();
+              if (classes) {
+                selector = element.tagName.toLowerCase() + '.' + classes;
+                xpath = '//' + element.tagName.toLowerCase() + '[@class="' + element.className + '"]';
+              } else {
+                selector = element.tagName.toLowerCase();
+                xpath = '//' + element.tagName.toLowerCase();
+              }
             }
-            else selector = element.tagName.toLowerCase();
+            else {
+              selector = element.tagName.toLowerCase();
+              xpath = '//' + element.tagName.toLowerCase();
+            }
 
             return {
               id: element.id || null,
               name: element.getAttribute('name') || null,
               className: element.className || null,
               tagName: element.tagName.toLowerCase(),
-              text: element.textContent ? element.textContent.trim().substring(0, 50) : '',
+              text: text.substring(0, 50),
               value: element.value || null,
               placeholder: element.getAttribute('placeholder') || null,
               type: element.getAttribute('type') || null,
               selector: selector,
               attributes: attributes,
-              xpath: null // Will be generated if needed
+              xpath: xpath // Generated XPath for better element matching
             };
           };
 
@@ -496,13 +651,22 @@ export class WebRecorder {
     return xpath;
   }
 
-  private async createLocator(selector: string): Promise<ElementLocator> {
-    // Try to create multiple locator strategies for resilience
-    return {
-      type: 'css',
-      value: selector,
-      fallbacks: []
-    };
+  private async createLocator(selector: string, xpath?: string): Promise<ElementLocator> {
+    // Prefer XPath for text-based elements (more reliable for dropdowns/menus)
+    // Fallback to CSS if XPath is not available
+    if (xpath) {
+      return {
+        type: 'xpath',
+        value: xpath,
+        fallbacks: [{ type: 'css', value: selector }]
+      };
+    } else {
+      return {
+        type: 'css',
+        value: selector,
+        fallbacks: []
+      };
+    }
   }
 
   private async addAction(actionData: Partial<TestAction>): Promise<void> {
@@ -576,25 +740,35 @@ export class WebRecorder {
       }
     }
 
-    // Add "Close Browser" action as last step (like Ranorex)
-    this.addAction({
-      type: ActionType.CUSTOM,
-      value: 'close_browser',
-      description: '🔴 End Test Suite - Close Browser'
-    });
+    // Don't auto-add close_browser - let user add it manually if needed
+    // Browser will stay open for reuse between tests
+
+    // Check if test file already exists - if so, append new actions instead of replacing
+    const testCasePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
+    let existingActions: TestAction[] = [];
+    let createdAt = Date.now();
+
+    if (fs.existsSync(testCasePath)) {
+      console.log('📝 Appending to existing test case...');
+      const existingTest = JSON.parse(fs.readFileSync(testCasePath, 'utf-8'));
+      existingActions = existingTest.actions || [];
+      createdAt = existingTest.createdAt || Date.now();
+    }
+
+    // Combine existing and new actions
+    const allActions = [...existingActions, ...this.actions];
 
     const testCase: TestCase = {
       id: this.testCaseId,
       name: this.config.testName || 'Recorded Web Test',
       description: 'Test case recorded from web browser',
       platform: PlatformType.WEB,
-      actions: this.actions,
-      createdAt: Date.now(),
+      actions: allActions,  // Combined actions
+      createdAt: createdAt,
       updatedAt: Date.now()
     };
 
     // Save test case to file
-    const testCasePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
     fs.writeFileSync(testCasePath, JSON.stringify(testCase, null, 2));
 
     // Save object repository
@@ -608,7 +782,11 @@ export class WebRecorder {
     fs.writeFileSync(objectRepoPath, JSON.stringify(objectsArray, null, 2));
 
     console.log(`✅ Test case saved: ${testCasePath}`);
-    console.log(`📊 Total actions recorded: ${this.actions.length}`);
+    if (existingActions.length > 0) {
+      console.log(`📊 Total actions: ${allActions.length} (${existingActions.length} existing + ${this.actions.length} new)`);
+    } else {
+      console.log(`📊 Total actions recorded: ${this.actions.length}`);
+    }
     console.log(`📦 Objects captured: ${objectsArray.length}`);
     console.log(`💾 Object repository saved: ${objectRepoPath}`);
     console.log('🌐 Browser kept open for next recording');
@@ -650,6 +828,126 @@ export class WebRecorder {
       type: ActionType.WAIT,
       value: milliseconds,
       description: `Wait for ${milliseconds}ms`
+    });
+  }
+
+  async pickElement(): Promise<string | null> {
+    if (!this.page) {
+      throw new Error('Page not initialized. Call start() first.');
+    }
+
+    console.log('🎯 Element picker activated - hover and click to select an element');
+
+    // Inject element picker overlay
+    await this.page.evaluate(() => {
+      // Create overlay to show we're in picking mode
+      const overlay = document.createElement('div');
+      overlay.id = 'qa-element-picker-overlay';
+      overlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        right: 0;
+        background: #ff5722;
+        color: white;
+        padding: 10px 20px;
+        z-index: 999999;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        font-weight: bold;
+        border-radius: 0 0 0 8px;
+      `;
+      overlay.textContent = '🎯 Click an element to select it (ESC to cancel)';
+      document.body.appendChild(overlay);
+
+      // Store original outline styles
+      (window as any).qaOriginalOutlines = new Map();
+
+      // Add hover effect
+      const hoverHandler = (e: MouseEvent) => {
+        e.stopPropagation();
+        // Remove previous highlights
+        document.querySelectorAll('.qa-hover-highlight').forEach(el => {
+          const originalOutline = (window as any).qaOriginalOutlines.get(el);
+          if (originalOutline !== undefined) {
+            (el as HTMLElement).style.outline = originalOutline;
+          }
+          el.classList.remove('qa-hover-highlight');
+        });
+
+        // Highlight current element
+        const target = e.target as HTMLElement;
+        if (target && target.id !== 'qa-element-picker-overlay') {
+          (window as any).qaOriginalOutlines.set(target, target.style.outline);
+          target.style.outline = '3px solid #ff5722';
+          target.classList.add('qa-hover-highlight');
+        }
+      };
+
+      document.addEventListener('mouseover', hoverHandler);
+      (window as any).qaHoverHandler = hoverHandler;
+    });
+
+    // Wait for user to click an element or press ESC
+    return new Promise(async (resolve) => {
+      let cancelled = false;
+
+      // Create a race between click and ESC key
+      const result = await Promise.race([
+        // Wait for click
+        this.page!.evaluate(() => {
+          return new Promise<string | null>((resolveClick) => {
+            const clickListener = (e: MouseEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
+
+              const target = e.target as HTMLElement;
+              if (target && target.id !== 'qa-element-picker-overlay') {
+                // Generate CSS selector for the element
+                let selector = target.tagName.toLowerCase();
+                if (target.id) {
+                  selector = `#${target.id}`;
+                } else if (target.className) {
+                  const classes = target.className.split(' ').filter(c => c).join('.');
+                  if (classes) selector = `${target.tagName.toLowerCase()}.${classes}`;
+                }
+
+                document.removeEventListener('click', clickListener, true);
+                resolveClick(selector);
+              }
+            };
+
+            document.addEventListener('click', clickListener, true);
+          });
+        }),
+        // Wait for ESC key
+        this.page!.keyboard.press('Escape').then(() => null).catch(() => null)
+      ]);
+
+      // Clean up
+      await this.page!.evaluate(() => {
+        const overlay = document.getElementById('qa-element-picker-overlay');
+        if (overlay) overlay.remove();
+
+        document.querySelectorAll('.qa-hover-highlight').forEach(el => {
+          const originalOutline = (window as any).qaOriginalOutlines.get(el);
+          if (originalOutline !== undefined) {
+            (el as HTMLElement).style.outline = originalOutline;
+          }
+          el.classList.remove('qa-hover-highlight');
+        });
+
+        if ((window as any).qaHoverHandler) {
+          document.removeEventListener('mouseover', (window as any).qaHoverHandler);
+        }
+      });
+
+      if (result) {
+        console.log(`✅ Element selected: ${result}`);
+      } else {
+        console.log('❌ Element picker cancelled');
+      }
+
+      resolve(result);
     });
   }
 }

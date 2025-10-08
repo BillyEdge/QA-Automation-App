@@ -152,6 +152,14 @@
                             Orientation="Horizontal"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center">
+                    <Button x:Name="btnStopExecution"
+                            Content="⏹️ Stop"
+                            Style="{StaticResource DangerButton}"
+                            Padding="15,8"
+                            FontSize="12"
+                            Margin="0,0,10,0"
+                            Visibility="Collapsed"
+                            Click="BtnStopExecution_Click"/>
                     <TextBlock x:Name="lblStatus"
                                Text="● Ready"
                                FontSize="14"
@@ -289,6 +297,22 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="📋 Test Cases" FontSize="16" FontWeight="SemiBold" Foreground="#374151" VerticalAlignment="Center"/>
                             <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="btnStopExecutionMain"
+                                        Content="⏹️ Stop Execution"
+                                        Style="{StaticResource DangerButton}"
+                                        Click="BtnStopExecution_Click"
+                                        Height="35"
+                                        Width="150"
+                                        Visibility="Collapsed"
+                                        Margin="0,0,10,0"/>
+                                <Button x:Name="btnStopRecordingMain"
+                                        Content="🛑 Stop Recording"
+                                        Style="{StaticResource DangerButton}"
+                                        Click="BtnStopRecording_Click"
+                                        Height="35"
+                                        Width="150"
+                                        Visibility="Collapsed"
+                                        Margin="0,0,10,0"/>
                                 <Button Content="▶️ Run All Tests"
                                         Style="{StaticResource SuccessButton}"
                                         Click="BtnRunAllTests_Click"
@@ -324,7 +348,10 @@
                                   BorderThickness="1"
                                   RowHeight="40"
                                   FontSize="13"
-                                  SelectionChanged="DgTestCases_SelectionChanged">
+                                  SelectionChanged="DgTestCases_SelectionChanged"
+                                  AllowDrop="True"
+                                  PreviewMouseLeftButtonDown="DgTestCases_PreviewMouseLeftButtonDown"
+                                  Drop="DgTestCases_Drop">
                             <DataGrid.ColumnHeaderStyle>
                                 <Style TargetType="DataGridColumnHeader">
                                     <Setter Property="Background" Value="#F9FAFB"/>
@@ -494,13 +521,21 @@
                                   BorderThickness="1"
                                   RowHeight="40"
                                   FontSize="13"
-                                  MouseRightButtonUp="DgTestSteps_MouseRightButtonUp">
+                                  MouseRightButtonUp="DgTestSteps_MouseRightButtonUp"
+                                  AllowDrop="True"
+                                  PreviewMouseLeftButtonDown="DgTestSteps_PreviewMouseLeftButtonDown"
+                                  Drop="DgTestSteps_Drop">
                             <DataGrid.ContextMenu>
-                                <ContextMenu x:Name="testStepsContextMenu">
+                                <ContextMenu x:Name="testStepsContextMenu" Opened="TestStepsContextMenu_Opened">
                                     <MenuItem Header="Add Action">
+                                        <MenuItem Header="🌐 Open Browser" Click="MenuAddOpenBrowser_Click"/>
+                                        <MenuItem Header="🔴 Close Browser" Click="MenuAddCloseBrowser_Click"/>
+                                        <Separator/>
                                         <MenuItem Header="⏱️ Add Delay" Click="MenuAddDelay_Click"/>
                                         <MenuItem Header="⏳ Add Wait For Element" Click="MenuAddWaitFor_Click"/>
                                     </MenuItem>
+                                    <Separator/>
+                                    <MenuItem Header="🔗 Navigate to URL" Click="MenuAddNavigateToUrl_Click"/>
                                     <Separator/>
                                     <MenuItem Header="▶️ Start Recording from Here" Click="MenuStartRecordingFromHere_Click"/>
                                     <Separator/>

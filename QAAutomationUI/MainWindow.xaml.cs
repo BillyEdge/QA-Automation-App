@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Text.Json;
 using System.Collections.ObjectModel;
@@ -59,6 +61,9 @@ namespace QAAutomationUI
         private string? suiteFolderPath;
         private string? suiteUrl;
         private string? suitePlatform;
+        private string? suiteName;
+        private Process? currentExecutionProcess = null;
+        private TaskCompletionSource<bool>? currentCompletionSource = null;
 
         public MainWindow(string? suitePath = null)
         {
@@ -92,7 +97,7 @@ namespace QAAutomationUI
                         using (JsonDocument doc = JsonDocument.Parse(jsonContent))
                         {
                             var root = doc.RootElement;
-                            string suiteName = root.GetProperty("name").GetString() ?? "Unknown";
+                            suiteName = root.GetProperty("name").GetString() ?? "Unknown";
                             suitePlatform = root.GetProperty("platform").GetString() ?? "web";
                             suiteUrl = root.TryGetProperty("urlOrPath", out var urlProp) ? urlProp.GetString() : "";
 
@@ -127,6 +132,29 @@ namespace QAAutomationUI
                         AppendOutput($"\n💡 Ready to start testing! Choose a tab above to begin.\n");
                         AppendOutput($"🔧 Backend: {backendPath}\n");
                         AppendOutput($"🔍 Backend exists: {File.Exists(backendPath)}\n");
+
+                        // DEBUG: Show context menu items on load
+                        AppendOutput("\n🐛 DEBUG: Checking context menu items...\n");
+                        if (testStepsContextMenu != null)
+                        {
+                            AppendOutput($"   Menu has {testStepsContextMenu.Items.Count} items:\n");
+                            for (int i = 0; i < testStepsContextMenu.Items.Count; i++)
+                            {
+                                var item = testStepsContextMenu.Items[i];
+                                if (item is MenuItem mi)
+                                {
+                                    AppendOutput($"   [{i}] MenuItem: {mi.Header}\n");
+                                }
+                                else if (item is Separator)
+                                {
+                                    AppendOutput($"   [{i}] Separator\n");
+                                }
+                            }
+                        }
+                        else
+                        {
+                            AppendOutput("   ❌ testStepsContextMenu is NULL!\n");
+                        }
                     };
                 }
                 else
@@ -137,6 +165,18 @@ namespace QAAutomationUI
                         AppendOutput($"💡 Choose a tab above to start recording or executing tests.\n");
                         AppendOutput($"🔧 Backend: {backendPath}\n");
                         AppendOutput($"🔍 Backend exists: {File.Exists(backendPath)}\n");
+
+                        // Add Navigate to URL menu item
+                        AppendOutput("🔧 About to call AddNavigateToUrlMenuItem() [NO SUITE]...\n");
+                        try
+                        {
+                            AddNavigateToUrlMenuItem();
+                            AppendOutput("🔧 Finished calling AddNavigateToUrlMenuItem()\n");
+                        }
+                        catch (Exception menuEx)
+                        {
+                            AppendOutput($"❌ Exception in AddNavigateToUrlMenuItem: {menuEx.Message}\n");
+                        }
                     };
                 }
 
@@ -160,6 +200,10 @@ namespace QAAutomationUI
                     this.Topmost = false;
                     this.Activate();
                     LoadTestCases(); // Load test cases when window loads
+
+                    // Add Navigate to URL menu item after window is fully loaded
+                    AppendOutput("🔧 Attempting to add Navigate to URL menu item...\n");
+                    AddNavigateToUrlMenuItem();
                 };
             }
             catch (Exception ex)
@@ -325,7 +369,7 @@ namespace QAAutomationUI
             }
         }
 
-        private void BtnRunAllTests_Click(object sender, RoutedEventArgs e)
+        private async void BtnRunAllTests_Click(object sender, RoutedEventArgs e)
         {
             if (testCases.Count == 0)
             {
@@ -352,26 +396,37 @@ namespace QAAutomationUI
             string reportsDir = Path.Combine(Directory.GetCurrentDirectory(), "reports");
             Directory.CreateDirectory(reportsDir);
 
-            string reportPath = Path.Combine(reportsDir, "suite-report.html");
-            string suiteId = Path.GetFileNameWithoutExtension(suiteConfigPath);
+            string reportPath = Path.Combine(reportsDir, "suite-report.json");
+            string suiteId = suiteName ?? "suite-config";
             string loopArg = loopCount > 1 ? $" --loop {loopCount}" : "";
 
             AppendOutput($"\n▶️ Running all tests in suite (Loop: {loopCount}x)...\n");
-            ExecuteCommand($"suite:execute \"{suiteId}\" -r \"{reportPath}\"{loopArg}");
+            await ExecuteCommandAsync($"suite:execute \"{suiteId}\" -r \"{reportPath}\"{loopArg}");
 
-            // After execution, load and display the report
+            // After execution, load and display the report in app
+            // Add small delay to ensure file is fully written
+            await Task.Delay(500);
+
             if (File.Exists(reportPath))
             {
                 try
                 {
-                    LoadTestReport(reportPath);
-                    mainTabControl.SelectedIndex = 3; // Switch to Report tab
+                    Dispatcher.Invoke(() =>
+                    {
+                        LoadTestReport(reportPath);
+                        mainTabControl.SelectedIndex = 3; // Switch to Report tab
+                    });
                     AppendOutput($"📊 Suite report loaded successfully\n");
                 }
                 catch (Exception ex)
                 {
                     AppendOutput($"⚠️ Failed to load report: {ex.Message}\n");
+                    AppendOutput($"   Error details: {ex.ToString()}\n");
                 }
+            }
+            else
+            {
+                AppendOutput($"⚠️ Suite report file not found at: {reportPath}\n");
             }
         }
 
@@ -476,7 +531,73 @@ namespace QAAutomationUI
             }
         }
 
-        private void ExecuteCommand(string args)
+        private void StartContinueRecording(string args)
+        {
+            // This is for "Start Recording from Here" - it continues an existing test
+            // We use the same recording process as StartRecording, but with --continue flag
+            try
+            {
+                UpdateRecordingUI(true);
+                UpdateStatus("Recording...", Brushes.Red);
+                AppendOutput("🎬 Continuing recording...\n");
+
+                // Parse backend path - could be "node dist/index.js" or just "QA-Automation.exe"
+                string fileName;
+                string arguments;
+
+                if (backendPath.StartsWith("node "))
+                {
+                    fileName = "node";
+                    string scriptPath = backendPath.Substring(5).Trim().Trim('"');
+                    arguments = $"\"{scriptPath}\" {args}";
+                }
+                else
+                {
+                    fileName = backendPath;
+                    arguments = args;
+                }
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = fileName,
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Directory.GetCurrentDirectory()
+                };
+
+                recordingProcess = new Process { StartInfo = startInfo };
+                recordingProcess.OutputDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("  " + ev.Data + "\n"));
+                    }
+                };
+                recordingProcess.ErrorDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("❌ " + ev.Data + "\n"));
+                    }
+                };
+
+                recordingProcess.Start();
+                recordingProcess.BeginOutputReadLine();
+                recordingProcess.BeginErrorReadLine();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                UpdateRecordingUI(false);
+                UpdateStatus("Ready", Brushes.LimeGreen);
+            }
+        }
+
+        private async Task ExecuteCommandAsync(string args)
         {
             try
             {
@@ -511,34 +632,111 @@ namespace QAAutomationUI
                 };
 
                 var process = new Process { StartInfo = startInfo };
+                currentExecutionProcess = process; // Store for Stop button
+
+                // Use async event handlers
+                var outputBuilder = new System.Text.StringBuilder();
+                var errorBuilder = new System.Text.StringBuilder();
+                var completionSource = new TaskCompletionSource<bool>();
+                currentCompletionSource = completionSource; // Store for Stop button
+                bool completionSignaled = false;
+
                 process.OutputDataReceived += (s, ev) =>
                 {
                     if (!string.IsNullOrEmpty(ev.Data))
                     {
-                        Dispatcher.Invoke(() => AppendOutput("  " + ev.Data + "\n"));
+                        outputBuilder.AppendLine(ev.Data);
+                        Dispatcher.BeginInvoke(() => AppendOutput("  " + ev.Data + "\n"));
+
+                        // Check for completion signal (only trigger once)
+                        // Strip ANSI color codes and trim
+                        string cleanData = System.Text.RegularExpressions.Regex.Replace(ev.Data, @"\x1B\[[0-9;]*[a-zA-Z]", "").Trim();
+
+                        bool isComplete = cleanData.Contains("###EXECUTION_COMPLETE###") ||
+                                         cleanData.Contains("EXECUTION_COMPLETE") ||
+                                         cleanData.Contains("Report generated") ||
+                                         cleanData.Contains("EXIT_CODE");
+
+                        if (!completionSignaled && isComplete)
+                        {
+                            completionSignaled = true;
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                AppendOutput($"\n🔔 Execution completion detected!\n");
+                            });
+
+                            // Use async task to wait a moment then signal completion
+                            Task.Run(async () =>
+                            {
+                                await Task.Delay(2000); // Wait 2 seconds for remaining output
+                                completionSource.TrySetResult(true);
+                            });
+                        }
                     }
                 };
                 process.ErrorDataReceived += (s, ev) =>
                 {
                     if (!string.IsNullOrEmpty(ev.Data))
                     {
-                        Dispatcher.Invoke(() => AppendOutput("❌ " + ev.Data + "\n"));
+                        errorBuilder.AppendLine(ev.Data);
+                        Dispatcher.BeginInvoke(() => AppendOutput("❌ " + ev.Data + "\n"));
+
+                        // Also check for completion signal in error stream
+                        if (!completionSignaled && ev.Data.Contains("###EXECUTION_COMPLETE###"))
+                        {
+                            completionSignaled = true;
+                            Dispatcher.BeginInvoke(() => AppendOutput("🔔 Detected execution completion signal (from error stream)\n"));
+                            Task.Run(async () =>
+                            {
+                                await Task.Delay(1500);
+                                completionSource.TrySetResult(true);
+                            });
+                        }
                     }
                 };
 
                 process.Start();
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
-                process.WaitForExit();
+
+                // Wait for either completion signal or process exit
+                var processExitTask = process.WaitForExitAsync();
+                var completionTask = completionSource.Task;
+
+                var completedTask = await Task.WhenAny(completionTask, processExitTask);
+
+                if (completedTask == completionTask)
+                {
+                    AppendOutput("✅ Execution completed via signal\n");
+                }
+                else
+                {
+                    AppendOutput("✅ Process exited\n");
+                }
+
+                // Give a moment for final output to flush
+                await Task.Delay(500);
+
+                // Clear completion source to indicate execution is done
+                currentCompletionSource = null;
 
                 UpdateStatus("Ready", Brushes.LimeGreen);
                 AppendOutput("✅ Command completed\n");
+
+                // DON'T kill the process - let it stay alive to keep browser server running
+                // The process will exit naturally or stay idle for next command
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                currentCompletionSource = null;
                 UpdateStatus("Ready", Brushes.LimeGreen);
             }
+        }
+
+        private async void ExecuteCommand(string args)
+        {
+            await ExecuteCommandAsync(args);
         }
 
         private void UpdateRecordingUI(bool isRecording)
@@ -546,6 +744,7 @@ namespace QAAutomationUI
             Dispatcher.Invoke(() =>
             {
                 btnStopRecording.Visibility = isRecording ? Visibility.Visible : Visibility.Collapsed;
+                btnStopRecordingMain.Visibility = isRecording ? Visibility.Visible : Visibility.Collapsed;
             });
         }
 
@@ -555,7 +754,49 @@ namespace QAAutomationUI
             {
                 lblStatus.Text = "● " + text;
                 lblStatus.Foreground = color;
+
+                // Show Stop buttons when executing, hide when ready
+                bool isExecuting = text == "Executing...";
+                btnStopExecution.Visibility = isExecuting ? Visibility.Visible : Visibility.Collapsed;
+                btnStopExecutionMain.Visibility = isExecuting ? Visibility.Visible : Visibility.Collapsed;
             });
+        }
+
+        private void BtnStopExecution_Click(object sender, RoutedEventArgs e)
+        {
+            if (currentCompletionSource != null)
+            {
+                AppendOutput("\n⏹️ Execution stopped by user\n");
+                AppendOutput("🌐 Browser will remain open for next recording...\n");
+                currentCompletionSource.TrySetResult(true);
+                currentCompletionSource = null;
+            }
+
+            // Don't kill the process - let it end gracefully to keep browser alive
+            // Just wait a moment for it to finish
+            if (currentExecutionProcess != null && !currentExecutionProcess.HasExited)
+            {
+                Task.Run(async () =>
+                {
+                    // Give process 5 seconds to exit gracefully
+                    for (int i = 0; i < 50; i++)
+                    {
+                        if (currentExecutionProcess.HasExited)
+                            break;
+                        await Task.Delay(100);
+                    }
+
+                    // NEVER kill the process - just let it run to keep browser alive
+                    if (!currentExecutionProcess.HasExited)
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("⚠️ Process still running - leaving it alive to preserve browser session\n"));
+                        // Don't call Kill() - this would close the browser!
+                    }
+                    currentExecutionProcess = null;
+                });
+            }
+
+            UpdateStatus("Ready", Brushes.LimeGreen);
         }
 
         private void AppendOutput(string text)
@@ -754,7 +995,7 @@ namespace QAAutomationUI
             }
         }
 
-        private void BtnRunTest_Click(object sender, RoutedEventArgs e)
+        private async void BtnRunTest_Click(object sender, RoutedEventArgs e)
         {
             if (sender is System.Windows.Controls.Button btn && btn.Tag is string filePath)
             {
@@ -768,28 +1009,34 @@ namespace QAAutomationUI
                     loopCount = parsed;
                 }
 
-                string reportPath = Path.Combine(reportsDir, "report.html");
+                string reportPath = Path.Combine(reportsDir, "report.json");
                 string loopArg = loopCount > 1 ? $" --loop {loopCount}" : "";
-                ExecuteCommand($"execute \"{filePath}\" -r \"{reportPath}\"{loopArg}");
+                await ExecuteCommandAsync($"execute \"{filePath}\" -r \"{reportPath}\"{loopArg}");
 
                 // After execution completes, load and display the report
+                // Add small delay to ensure file is fully written
+                await Task.Delay(500);
+
                 if (File.Exists(reportPath))
                 {
                     try
                     {
-                        LoadTestReport(reportPath);
-                        // Switch to Report tab (index 3)
-                        mainTabControl.SelectedIndex = 3;
+                        Dispatcher.Invoke(() =>
+                        {
+                            LoadTestReport(reportPath);
+                            mainTabControl.SelectedIndex = 3; // Switch to Report tab
+                        });
                         AppendOutput($"📊 Test report loaded successfully\n");
                     }
                     catch (Exception ex)
                     {
                         AppendOutput($"⚠️ Failed to load report: {ex.Message}\n");
+                        AppendOutput($"   Error details: {ex.ToString()}\n");
                     }
                 }
                 else
                 {
-                    AppendOutput($"⚠️ Report file not found: {reportPath}\n");
+                    AppendOutput($"⚠️ Report file not found at: {reportPath}\n");
                 }
             }
         }
@@ -1086,6 +1333,392 @@ namespace QAAutomationUI
             // Context menu will show automatically
         }
 
+        private void TestStepsContextMenu_Opened(object sender, RoutedEventArgs e)
+        {
+            AppendOutput("\n=== DEBUG: Context Menu Opening ===\n");
+            var menu = testStepsContextMenu;
+            if (menu != null)
+            {
+                AppendOutput($"Menu Items Count: {menu.Items.Count}\n");
+                for (int i = 0; i < menu.Items.Count; i++)
+                {
+                    var item = menu.Items[i];
+                    if (item is MenuItem mi)
+                    {
+                        AppendOutput($"  [{i}] MenuItem: '{mi.Header}'\n");
+                        if (mi.Items.Count > 0)
+                        {
+                            AppendOutput($"      (has {mi.Items.Count} sub-items)\n");
+                        }
+                    }
+                    else if (item is Separator)
+                    {
+                        AppendOutput($"  [{i}] Separator\n");
+                    }
+                    else
+                    {
+                        AppendOutput($"  [{i}] {item.GetType().Name}\n");
+                    }
+                }
+            }
+            else
+            {
+                AppendOutput("Menu is NULL!\n");
+            }
+            AppendOutput("=================================\n\n");
+        }
+
+        private void AddNavigateToUrlMenuItem()
+        {
+            AppendOutput("🔧 AddNavigateToUrlMenuItem() called\n");
+            try
+            {
+                var contextMenu = testStepsContextMenu;
+                AppendOutput($"🔧 testStepsContextMenu = {(contextMenu == null ? "NULL" : "NOT NULL")}\n");
+                if (contextMenu == null)
+                {
+                    AppendOutput("⚠️ testStepsContextMenu is null\n");
+                    return;
+                }
+
+                AppendOutput($"🔧 Context menu has {contextMenu.Items.Count} items\n");
+
+                // Check if already exists
+                bool alreadyExists = false;
+                foreach (var item in contextMenu.Items)
+                {
+                    if (item is MenuItem mi && mi.Header?.ToString()?.Contains("Navigate to URL") == true)
+                    {
+                        alreadyExists = true;
+                        break;
+                    }
+                }
+
+                if (!alreadyExists)
+                {
+                    // Find "Continue if Fail" menu item
+                    int continueIfFailIndex = -1;
+                    for (int i = 0; i < contextMenu.Items.Count; i++)
+                    {
+                        if (contextMenu.Items[i] is MenuItem menuItem &&
+                            menuItem.Header?.ToString()?.Contains("Continue if Fail") == true)
+                        {
+                            continueIfFailIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (continueIfFailIndex >= 0)
+                    {
+                        // Add separator after "Continue if Fail"
+                        var separator = new Separator();
+                        contextMenu.Items.Insert(continueIfFailIndex + 1, separator);
+
+                        // Add "Navigate to URL" menu item as main menu item
+                        var navigateMenuItem = new MenuItem
+                        {
+                            Header = "🔗 Navigate to URL"
+                        };
+                        navigateMenuItem.Click += MenuAddNavigateToUrl_Click;
+                        contextMenu.Items.Insert(continueIfFailIndex + 2, navigateMenuItem);
+
+                        AppendOutput("✅ Added 'Navigate to URL' menu item!\n");
+                    }
+                    else
+                    {
+                        AppendOutput("⚠️ Could not find 'Continue if Fail' menu item\n");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Error adding Navigate menu: {ex.Message}\n");
+            }
+        }
+
+        private void MenuAddOpenBrowser_Click(object sender, RoutedEventArgs e)
+        {
+            if (dgTestSteps.SelectedItem == null)
+            {
+                MessageBox.Show("Please select a test step first.", "Information", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Prompt user for URL (optional)
+            var urlDialog = new Window
+            {
+                Title = "Start Browser",
+                Width = 500,
+                Height = 200,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F1F5F9"))
+            };
+
+            var grid = new Grid { Margin = new Thickness(20) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var label = new TextBlock
+            {
+                Text = "Enter URL to navigate (optional):",
+                FontSize = 14,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            Grid.SetRow(label, 0);
+            grid.Children.Add(label);
+
+            var urlTextBox = new TextBox
+            {
+                Text = "https://",
+                FontSize = 14,
+                Padding = new Thickness(10),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Style = (Style)FindResource("ModernTextBox")
+            };
+            Grid.SetRow(urlTextBox, 1);
+            grid.Children.Add(urlTextBox);
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 15, 0, 0)
+            };
+            Grid.SetRow(buttonPanel, 2);
+
+            var okButton = new Button
+            {
+                Content = "OK",
+                Width = 80,
+                Margin = new Thickness(0, 0, 10, 0),
+                Style = (Style)FindResource("SuccessButton")
+            };
+            okButton.Click += (s, args) =>
+            {
+                urlDialog.DialogResult = true;
+                urlDialog.Close();
+            };
+            buttonPanel.Children.Add(okButton);
+
+            var cancelButton = new Button
+            {
+                Content = "Cancel",
+                Width = 80,
+                Style = (Style)FindResource("SecondaryButton")
+            };
+            cancelButton.Click += (s, args) =>
+            {
+                urlDialog.DialogResult = false;
+                urlDialog.Close();
+            };
+            buttonPanel.Children.Add(cancelButton);
+
+            grid.Children.Add(buttonPanel);
+            urlDialog.Content = grid;
+
+            // Show dialog
+            if (urlDialog.ShowDialog() == true)
+            {
+                string url = urlTextBox.Text.Trim();
+
+                // If URL is empty or just "https://", use "start_browser" value
+                // Otherwise use the URL as value
+                string actionValue = (string.IsNullOrEmpty(url) || url == "https://")
+                    ? "start_browser"
+                    : url;
+
+                InsertActionAfterSelected("custom", "🌐 Start Browser - Open Chromium", actionValue);
+                AppendOutput($"🌐 Added 'Open Browser' action{(actionValue != "start_browser" ? $" with URL: {actionValue}" : "")}\n");
+            }
+        }
+
+        private void MenuAddCloseBrowser_Click(object sender, RoutedEventArgs e)
+        {
+            if (dgTestSteps.SelectedItem == null)
+            {
+                MessageBox.Show("Please select a test step first.", "Information", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            InsertActionAfterSelected("custom", "🔴 Close Browser", "close_browser");
+            AppendOutput("🔴 Added 'Close Browser' action\n");
+        }
+
+        private void BtnAddNavigate_Click(object sender, RoutedEventArgs e)
+        {
+            // Show dialog to input URL
+            var inputDialog = new Window
+            {
+                Title = "Add Navigate to URL",
+                Width = 500,
+                Height = 180,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
+
+            var panel = new StackPanel { Margin = new Thickness(20) };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "Enter URL to navigate to:",
+                Margin = new Thickness(0, 0, 0, 10),
+                FontWeight = FontWeights.SemiBold
+            });
+
+            var txtUrl = new TextBox
+            {
+                Text = suiteUrl ?? "https://",
+                Margin = new Thickness(0, 0, 0, 20),
+                Padding = new Thickness(8),
+                FontSize = 14
+            };
+            panel.Children.Add(txtUrl);
+
+            var btnPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var btnOk = new Button
+            {
+                Content = "Add",
+                Width = 80,
+                Height = 32,
+                Background = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.SemiBold
+            };
+            btnOk.Click += (s, args) => {
+                if (string.IsNullOrWhiteSpace(txtUrl.Text))
+                {
+                    MessageBox.Show("Please enter a valid URL.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                inputDialog.DialogResult = true;
+                inputDialog.Close();
+            };
+            btnPanel.Children.Add(btnOk);
+
+            panel.Children.Add(btnPanel);
+            inputDialog.Content = panel;
+
+            if (inputDialog.ShowDialog() == true)
+            {
+                string url = txtUrl.Text.Trim();
+
+                if (dgTestSteps.SelectedItem != null)
+                {
+                    InsertActionAfterSelected("navigate", $"🔗 Navigate to {url}", url);
+                }
+                else
+                {
+                    // No selection - add at end
+                    var newAction = new TestStepInfo
+                    {
+                        Id = Guid.NewGuid().ToString(),
+                        StepNumber = testSteps.Count + 1,
+                        Type = "NAVIGATE",
+                        ObjectName = "",
+                        Description = $"Navigate to {url}",
+                        Value = url
+                    };
+                    testSteps.Add(newAction);
+                    SaveTestStepsOrder();
+                }
+
+                AppendOutput($"✅ Added Navigate to URL: {url}\n");
+            }
+        }
+
+        private void MenuAddNavigateToUrl_Click(object sender, RoutedEventArgs e)
+        {
+            if (dgTestSteps.SelectedItem == null)
+            {
+                MessageBox.Show("Please select a test step first.", "Information", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Show dialog to enter URL
+            var urlDialog = new Window
+            {
+                Title = "Navigate to URL",
+                Width = 500,
+                Height = 180,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
+
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+            panel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = "Enter URL:",
+                Margin = new Thickness(0, 0, 0, 10),
+                FontWeight = FontWeights.SemiBold
+            });
+
+            var txtUrl = new System.Windows.Controls.TextBox
+            {
+                Text = suiteUrl ?? "https://",
+                Margin = new Thickness(0, 0, 0, 20),
+                Padding = new Thickness(8),
+                FontSize = 14
+            };
+            panel.Children.Add(txtUrl);
+
+            var btnPanel = new System.Windows.Controls.StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+
+            var btnCancel = new System.Windows.Controls.Button
+            {
+                Content = "Cancel",
+                Width = 80,
+                Height = 32,
+                Margin = new Thickness(0, 0, 10, 0)
+            };
+            btnCancel.Click += (s, args) => {
+                urlDialog.DialogResult = false;
+                urlDialog.Close();
+            };
+            btnPanel.Children.Add(btnCancel);
+
+            var btnOk = new System.Windows.Controls.Button
+            {
+                Content = "Add",
+                Width = 80,
+                Height = 32,
+                Background = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.SemiBold
+            };
+            btnOk.Click += (s, args) => {
+                if (string.IsNullOrWhiteSpace(txtUrl.Text))
+                {
+                    MessageBox.Show("Please enter a valid URL.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                urlDialog.DialogResult = true;
+                urlDialog.Close();
+            };
+            btnPanel.Children.Add(btnOk);
+
+            panel.Children.Add(btnPanel);
+
+            urlDialog.Content = panel;
+
+            if (urlDialog.ShowDialog() == true)
+            {
+                string url = txtUrl.Text.Trim();
+                InsertActionAfterSelected("navigate", $"🔗 Navigate to {url}", url);
+                AppendOutput($"🔗 Added 'Navigate to URL' action: {url}\n");
+            }
+        }
+
         private void MenuAddDelay_Click(object sender, RoutedEventArgs e)
         {
             if (dgTestSteps.SelectedItem == null)
@@ -1139,7 +1772,7 @@ namespace QAAutomationUI
             {
                 Title = "Add Wait For Element",
                 Width = 500,
-                Height = 200,
+                Height = 250,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = this
             };
@@ -1147,8 +1780,54 @@ namespace QAAutomationUI
             var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
             panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Element Selector (CSS/XPath):", Margin = new Thickness(0, 0, 0, 10) });
 
-            var txtSelector = new System.Windows.Controls.TextBox { Margin = new Thickness(0, 0, 0, 20) };
+            var txtSelector = new System.Windows.Controls.TextBox { Margin = new Thickness(0, 0, 0, 10) };
             panel.Children.Add(txtSelector);
+
+            var btnPick = new System.Windows.Controls.Button { Content = "🎯 Pick Element from Browser", Width = 200, Height = 30, Margin = new Thickness(0, 0, 0, 20) };
+            btnPick.Click += async (s, args) => {
+                try
+                {
+                    btnPick.IsEnabled = false;
+                    btnPick.Content = "Picking element...";
+
+                    // Call the pick-element command
+                    var pickProcess = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "node",
+                        Arguments = "dist/index.js pick-element",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Directory.GetCurrentDirectory()
+                    };
+
+                    var process = System.Diagnostics.Process.Start(pickProcess);
+                    var output = await process.StandardOutput.ReadToEndAsync();
+                    await process.WaitForExitAsync();
+
+                    // Parse the output to get the selector
+                    var lines = output.Split('\n');
+                    foreach (var line in lines)
+                    {
+                        if (line.StartsWith("SELECTED_ELEMENT:"))
+                        {
+                            txtSelector.Text = line.Substring("SELECTED_ELEMENT:".Length).Trim();
+                            break;
+                        }
+                    }
+
+                    btnPick.Content = "🎯 Pick Element from Browser";
+                    btnPick.IsEnabled = true;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Error picking element: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    btnPick.Content = "🎯 Pick Element from Browser";
+                    btnPick.IsEnabled = true;
+                }
+            };
+            panel.Children.Add(btnPick);
 
             var btnOk = new System.Windows.Controls.Button { Content = "Add Wait", Width = 100, Height = 30 };
             btnOk.Click += (s, args) => {
@@ -1177,7 +1856,7 @@ namespace QAAutomationUI
             MessageBox.Show("Continue if Fail flag will be toggled for this step.", "Feature", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        private void MenuStartRecordingFromHere_Click(object sender, RoutedEventArgs e)
+        private async void MenuStartRecordingFromHere_Click(object sender, RoutedEventArgs e)
         {
             if (dgTestSteps.SelectedItem == null)
             {
@@ -1185,8 +1864,119 @@ namespace QAAutomationUI
                 return;
             }
 
-            // TODO: Implement start recording from here functionality
-            MessageBox.Show("This feature will allow you to continue recording from this point.", "Feature", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (string.IsNullOrEmpty(currentTestFilePath))
+            {
+                MessageBox.Show("No test case loaded.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            // Stop any running execution first
+            if (currentCompletionSource != null)
+            {
+                AppendOutput("\n⏹️ Stopping current execution before starting recording...\n");
+                currentCompletionSource.TrySetResult(true);
+                currentCompletionSource = null;
+                await Task.Delay(500); // Give executor time to stop
+            }
+
+            // Stop any existing recording first
+            if (recordingProcess != null && !recordingProcess.HasExited)
+            {
+                AppendOutput("\n⏹️ Stopping existing recording before starting new one...\n");
+                try
+                {
+                    recordingProcess.StandardInput.WriteLine("stop");
+                    recordingProcess.StandardInput.Flush();
+                    await Task.Delay(1000); // Give recorder time to stop
+                }
+                catch (Exception ex)
+                {
+                    AppendOutput($"⚠️ Error stopping existing recording: {ex.Message}\n");
+                }
+                UpdateRecordingUI(false);
+            }
+
+            var selectedStep = (TestStepInfo)dgTestSteps.SelectedItem;
+
+            // Check if browser is already open
+            var result = MessageBox.Show(
+                "Is the browser already open at the correct state?\n\n" +
+                "Click YES if you just ran this test and the browser is still open.\n" +
+                "Click NO to execute steps 1-" + selectedStep.StepNumber + " first.",
+                "Browser State",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (result == MessageBoxResult.Cancel)
+                return;
+
+            try
+            {
+                if (result == MessageBoxResult.No)
+                {
+                    // Execute all steps up to the selected one to get to that state
+                    AppendOutput($"\n🎬 Executing steps 1-{selectedStep.StepNumber} to reach recording point...\n");
+
+                    // Create a temporary test case with only the steps up to the selected one
+                    string testJson = File.ReadAllText(currentTestFilePath);
+                    using (JsonDocument doc = JsonDocument.Parse(testJson))
+                    {
+                        var root = doc.RootElement;
+                        var actions = root.GetProperty("actions").EnumerateArray().Take(selectedStep.StepNumber).ToList();
+
+                        // Create temp test file
+                        var tempTest = new
+                        {
+                            id = "temp-" + Guid.NewGuid().ToString(),
+                            name = "Temp Setup",
+                            description = "Setup for recording continuation",
+                            platform = root.GetProperty("platform").GetString(),
+                            actions = actions.Select(a => JsonSerializer.Deserialize<object>(a.GetRawText())).ToList(),
+                            createdAt = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                            updatedAt = DateTimeOffset.Now.ToUnixTimeMilliseconds()
+                        };
+
+                        string tempPath = Path.Combine(Path.GetTempPath(), "qa-temp-setup.json");
+                        File.WriteAllText(tempPath, JsonSerializer.Serialize(tempTest, new JsonSerializerOptions { WriteIndented = true }));
+
+                        // Execute the temp test to get to the desired state
+                        await ExecuteCommandAsync($"execute \"{tempPath}\"");
+
+                        // Clean up temp file
+                        File.Delete(tempPath);
+                    }
+
+                    AppendOutput($"✅ Setup complete. Starting recorder...\n");
+                }
+                else
+                {
+                    AppendOutput($"✅ Using existing browser. Starting recorder to continue from step {selectedStep.StepNumber}...\n");
+                }
+
+                // Start web recorder with the CURRENT test file (not a new test)
+                // Get the current test info
+                string currentTestJson = File.ReadAllText(currentTestFilePath);
+                using (JsonDocument currentDoc = JsonDocument.Parse(currentTestJson))
+                {
+                    var currentRoot = currentDoc.RootElement;
+                    string currentTestName = currentRoot.GetProperty("name").GetString() ?? "Untitled";
+
+                    AppendOutput($"🎥 Continuing recording for test: {currentTestName}\n");
+                    AppendOutput($"📝 New steps will be appended after step {selectedStep.StepNumber}\n");
+
+                    // Start the recorder - it will append to the existing test file
+                    string startUrl = suiteUrl ?? "https://example.com";
+                    string recordArgs = $"record:web -n \"{currentTestName}\" -u \"{startUrl}\" -o \"{Path.GetDirectoryName(currentTestFilePath)}\" --continue";
+
+                    // Use a separate method for continuing recording (don't interfere with normal Start Recording)
+                    StartContinueRecording(recordArgs);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Error: {ex.Message}\n");
+                MessageBox.Show($"Failed to start recording from this point: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
 
         private void InsertActionAfterSelected(string actionType, string description, string value)
@@ -1202,23 +1992,59 @@ namespace QAAutomationUI
 
                 // Read current test case
                 string jsonContent = File.ReadAllText(currentTestFilePath);
-                var testCaseDoc = System.Text.Json.JsonDocument.Parse(jsonContent);
-                var root = testCaseDoc.RootElement;
-
-                // Build new actions array with inserted action
-                var actionsList = new System.Collections.Generic.List<System.Text.Json.JsonElement>();
-                bool inserted = false;
-
-                foreach (var action in root.GetProperty("actions").EnumerateArray())
+                using (JsonDocument testCaseDoc = JsonDocument.Parse(jsonContent))
                 {
-                    actionsList.Add(action);
+                    var root = testCaseDoc.RootElement;
 
-                    // Insert after matching ID
-                    if (action.GetProperty("id").GetString() == selectedStep.Id && !inserted)
+                    // Build new JSON with inserted action
+                    var actionsArray = new System.Collections.Generic.List<object>();
+                    bool inserted = false;
+
+                    foreach (var action in root.GetProperty("actions").EnumerateArray())
                     {
-                        // Create new action (this is a simplified version - you'll need to add proper action creation)
-                        inserted = true;
+                        // Copy existing action as dictionary
+                        var actionDict = new System.Collections.Generic.Dictionary<string, object>();
+                        foreach (var prop in action.EnumerateObject())
+                        {
+                            actionDict[prop.Name] = JsonSerializer.Deserialize<object>(prop.Value.GetRawText());
+                        }
+                        actionsArray.Add(actionDict);
+
+                        // Insert after matching ID
+                        if (action.GetProperty("id").GetString() == selectedStep.Id && !inserted)
+                        {
+                            // Create new action
+                            var newAction = new System.Collections.Generic.Dictionary<string, object>
+                            {
+                                ["id"] = Guid.NewGuid().ToString(),
+                                ["timestamp"] = DateTimeOffset.Now.ToUnixTimeMilliseconds(),
+                                ["platform"] = "web",
+                                ["type"] = actionType,
+                                ["value"] = value,
+                                ["description"] = description,
+                                ["metadata"] = new System.Collections.Generic.Dictionary<string, object>()
+                            };
+                            actionsArray.Add(newAction);
+                            inserted = true;
+                        }
                     }
+
+                    // Create updated test case
+                    var updatedTestCase = new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["id"] = root.GetProperty("id").GetString(),
+                        ["name"] = root.GetProperty("name").GetString(),
+                        ["description"] = root.GetProperty("description").GetString(),
+                        ["platform"] = root.GetProperty("platform").GetString(),
+                        ["actions"] = actionsArray,
+                        ["createdAt"] = root.GetProperty("createdAt").GetInt64(),
+                        ["updatedAt"] = DateTimeOffset.Now.ToUnixTimeMilliseconds()
+                    };
+
+                    // Save updated test case
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    string updatedJson = JsonSerializer.Serialize(updatedTestCase, options);
+                    File.WriteAllText(currentTestFilePath, updatedJson);
                 }
 
                 // Reload test steps to show the change
@@ -1440,6 +2266,231 @@ namespace QAAutomationUI
                 recordingProcess.Kill();
             }
             base.OnClosing(e);
+        }
+
+        // Drag-and-drop for Test Steps
+        private TestStepInfo? draggedStep;
+
+        private void DgTestSteps_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.OriginalSource is FrameworkElement element)
+            {
+                // Don't start drag if clicking on a button or other interactive element
+                if (element is Button || FindParent<Button>(element) != null)
+                {
+                    return;
+                }
+
+                var row = FindParent<DataGridRow>(element);
+                if (row != null && row.Item is TestStepInfo step)
+                {
+                    draggedStep = step;
+                    DragDrop.DoDragDrop(dgTestSteps, step, DragDropEffects.Move);
+                }
+            }
+        }
+
+        private void DgTestSteps_Drop(object sender, DragEventArgs e)
+        {
+            if (draggedStep != null && e.Data.GetDataPresent(typeof(TestStepInfo)))
+            {
+                var target = GetDataGridRowAtPoint(dgTestSteps, e.GetPosition(dgTestSteps));
+                if (target != null && target.Item is TestStepInfo targetStep && draggedStep != targetStep)
+                {
+                    int draggedIndex = testSteps.IndexOf(draggedStep);
+                    int targetIndex = testSteps.IndexOf(targetStep);
+
+                    if (draggedIndex >= 0 && targetIndex >= 0)
+                    {
+                        // Reorder in the collection
+                        testSteps.RemoveAt(draggedIndex);
+                        testSteps.Insert(targetIndex, draggedStep);
+
+                        // Renumber steps
+                        for (int i = 0; i < testSteps.Count; i++)
+                        {
+                            testSteps[i].StepNumber = i + 1;
+                        }
+
+                        // Save to file
+                        SaveTestStepsOrder();
+                        AppendOutput($"📝 Reordered step {draggedIndex + 1} to position {targetIndex + 1}\n");
+                    }
+                }
+            }
+            draggedStep = null;
+        }
+
+        // Drag-and-drop for Test Cases
+        private TestCaseInfo? draggedTestCase;
+
+        private void DgTestCases_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.OriginalSource is FrameworkElement element)
+            {
+                // Don't start drag if clicking on a button or other interactive element
+                if (element is Button || FindParent<Button>(element) != null)
+                {
+                    return;
+                }
+
+                var row = FindParent<DataGridRow>(element);
+                if (row != null && row.Item is TestCaseInfo testCase)
+                {
+                    draggedTestCase = testCase;
+                    DragDrop.DoDragDrop(dgTestCases, testCase, DragDropEffects.Move);
+                }
+            }
+        }
+
+        private void DgTestCases_Drop(object sender, DragEventArgs e)
+        {
+            if (draggedTestCase != null && e.Data.GetDataPresent(typeof(TestCaseInfo)))
+            {
+                var target = GetDataGridRowAtPoint(dgTestCases, e.GetPosition(dgTestCases));
+                if (target != null && target.Item is TestCaseInfo targetCase && draggedTestCase != targetCase)
+                {
+                    int draggedIndex = testCases.IndexOf(draggedTestCase);
+                    int targetIndex = testCases.IndexOf(targetCase);
+
+                    if (draggedIndex >= 0 && targetIndex >= 0)
+                    {
+                        // Reorder in the collection
+                        testCases.RemoveAt(draggedIndex);
+                        testCases.Insert(targetIndex, draggedTestCase);
+
+                        // Save to suite config
+                        SaveTestCasesOrder();
+                        AppendOutput($"📝 Reordered test case from position {draggedIndex + 1} to {targetIndex + 1}\n");
+                    }
+                }
+            }
+            draggedTestCase = null;
+        }
+
+        // Helper methods
+        private T? FindParent<T>(DependencyObject child) where T : DependencyObject
+        {
+            DependencyObject? parentObject = VisualTreeHelper.GetParent(child);
+            if (parentObject == null) return null;
+            if (parentObject is T parent) return parent;
+            return FindParent<T>(parentObject);
+        }
+
+        private DataGridRow? GetDataGridRowAtPoint(DataGrid grid, Point point)
+        {
+            var element = grid.InputHitTest(point) as UIElement;
+            if (element != null)
+            {
+                return FindParent<DataGridRow>(element);
+            }
+            return null;
+        }
+
+        private void SaveTestStepsOrder()
+        {
+            if (string.IsNullOrEmpty(currentTestFilePath))
+                return;
+
+            try
+            {
+                // Read current test case
+                string jsonContent = File.ReadAllText(currentTestFilePath);
+                using (JsonDocument testCaseDoc = JsonDocument.Parse(jsonContent))
+                {
+                    var root = testCaseDoc.RootElement;
+
+                    // Get actions in current UI order
+                    var actionsArray = new System.Collections.Generic.List<object>();
+                    foreach (var step in testSteps)
+                    {
+                        // Find the action by ID
+                        foreach (var action in root.GetProperty("actions").EnumerateArray())
+                        {
+                            if (action.GetProperty("id").GetString() == step.Id)
+                            {
+                                var actionDict = new System.Collections.Generic.Dictionary<string, object>();
+                                foreach (var prop in action.EnumerateObject())
+                                {
+                                    actionDict[prop.Name] = JsonSerializer.Deserialize<object>(prop.Value.GetRawText());
+                                }
+                                actionsArray.Add(actionDict);
+                                break;
+                            }
+                        }
+                    }
+
+                    // Create updated test case
+                    var updatedTestCase = new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["id"] = root.GetProperty("id").GetString(),
+                        ["name"] = root.GetProperty("name").GetString(),
+                        ["description"] = root.GetProperty("description").GetString(),
+                        ["platform"] = root.GetProperty("platform").GetString(),
+                        ["actions"] = actionsArray,
+                        ["createdAt"] = root.GetProperty("createdAt").GetInt64(),
+                        ["updatedAt"] = DateTimeOffset.Now.ToUnixTimeMilliseconds()
+                    };
+
+                    // Save updated test case
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    string updatedJson = JsonSerializer.Serialize(updatedTestCase, options);
+                    File.WriteAllText(currentTestFilePath, updatedJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Error saving test steps order: {ex.Message}\n");
+            }
+        }
+
+        private void SaveTestCasesOrder()
+        {
+            if (string.IsNullOrEmpty(suiteConfigPath))
+                return;
+
+            try
+            {
+                // Read current suite config
+                string jsonContent = File.ReadAllText(suiteConfigPath);
+                using (JsonDocument doc = JsonDocument.Parse(jsonContent))
+                {
+                    var root = doc.RootElement;
+
+                    // Get test cases in current UI order
+                    var testCasesList = new System.Collections.Generic.List<string>();
+                    foreach (var testCase in testCases)
+                    {
+                        testCasesList.Add(testCase.FilePath);
+                    }
+
+                    // Create updated suite config
+                    var updatedConfig = new System.Collections.Generic.Dictionary<string, object>
+                    {
+                        ["name"] = root.GetProperty("name").GetString(),
+                        ["description"] = root.GetProperty("description").GetString(),
+                        ["platform"] = root.GetProperty("platform").GetString(),
+                        ["tests"] = testCasesList,
+                        ["createdAt"] = root.GetProperty("createdAt").GetString(),
+                        ["updatedAt"] = DateTime.Now.ToString("o")
+                    };
+
+                    // Add optional properties if they exist
+                    if (root.TryGetProperty("urlOrPath", out var urlProp))
+                    {
+                        updatedConfig["urlOrPath"] = urlProp.GetString();
+                    }
+
+                    // Save updated suite config
+                    var options = new JsonSerializerOptions { WriteIndented = true };
+                    string updatedJson = JsonSerializer.Serialize(updatedConfig, options);
+                    File.WriteAllText(suiteConfigPath, updatedJson);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Error saving test cases order: {ex.Message}\n");
+            }
         }
     }
 }

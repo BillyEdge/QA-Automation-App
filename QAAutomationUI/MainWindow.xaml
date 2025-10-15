@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="QA Automation Platform" Height="850" Width="1200"
         WindowStartupLocation="CenterScreen"
+        WindowState="Maximized"
         Background="#F1F5F9">
 
     <Window.Resources>
@@ -233,6 +234,11 @@
 
                             <!-- Recording Controls -->
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,20">
+                                <Button x:Name="btnOpenBrowser"
+                                        Content="🌐 Open Browser"
+                                        Style="{StaticResource PrimaryButton}"
+                                        Click="BtnOpenBrowser_Click"
+                                        Margin="0,0,10,0"/>
                                 <Button Content="🎬 Start Recording"
                                         Style="{StaticResource SuccessButton}"
                                         Click="BtnStartRecording_Click"
@@ -323,13 +329,7 @@
                                         Style="{StaticResource SecondaryButton}"
                                         Click="BtnRefreshTests_Click"
                                         Height="35"
-                                        Width="100"
-                                        Margin="0,0,10,0"/>
-                                <Button Content="📊 View Reports"
-                                        Style="{StaticResource SecondaryButton}"
-                                        Click="BtnViewReports_Click"
-                                        Height="35"
-                                        Width="120"/>
+                                        Width="100"/>
                             </StackPanel>
                         </Grid>
 

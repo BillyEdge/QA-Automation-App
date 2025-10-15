@@ -363,4 +363,78 @@ program
     });
   });
 
+// Check if browser has pages
+program
+  .command('check-browser-pages')
+  .description('Check if browser has any pages open')
+  .action(async () => {
+    const { browserManager } = await import('./browser/browserManager');
+
+    try {
+      if (!browserManager.isBrowserOpen()) {
+        console.log('HAS_PAGES:false');
+        process.exit(0);
+        return;
+      }
+
+      const browser = await browserManager.getBrowser();
+      const context = await browserManager.getContext();
+      const pages = context.pages();
+
+      console.log(`HAS_PAGES:${pages.length > 0}`);
+      console.log(`PAGE_COUNT:${pages.length}`);
+      if (pages.length > 0) {
+        console.log(`CURRENT_URL:${pages[0].url()}`);
+      }
+      process.exit(0);
+
+    } catch (error: any) {
+      console.log('HAS_PAGES:false');
+      process.exit(1);
+    }
+  });
+
+// Open Browser Command
+program
+  .command('open-browser')
+  .description('Open browser and connect to persistent browser server')
+  .option('-u, --url <url>', 'URL to navigate to after opening browser')
+  .option('--wait', 'Wait and keep process alive (for manual browser opening)')
+  .action(async (options) => {
+    const { browserManager } = await import('./browser/browserManager');
+
+    try {
+      console.log('🌐 Opening browser and connecting to persistent server...');
+
+      const browser = await browserManager.getBrowser();
+      const context = await browserManager.getContext();
+      const page = await browserManager.getPage();
+
+      console.log('✅ Browser opened successfully!');
+
+      // Navigate to URL if provided
+      if (options.url) {
+        console.log(`📍 Navigating to: ${options.url}`);
+        await page.goto(options.url);
+        await page.waitForLoadState('domcontentloaded');
+        console.log('✅ Navigation complete!');
+      }
+
+      console.log('💡 You can now start recording actions.');
+      console.log('🔗 Browser will stay open - ready for test execution or recording');
+
+      // Keep process alive if requested (for manual browser opening)
+      if (options.wait) {
+        setInterval(() => {}, 60000);
+      } else {
+        // Exit after opening (for automated calls from UI)
+        process.exit(0);
+      }
+
+    } catch (error: any) {
+      console.error('❌ Failed to open browser:', error.message);
+      process.exit(1);
+    }
+  });
+
 program.parse();

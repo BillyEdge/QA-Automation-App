@@ -211,7 +211,6 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- Delete Suite Button (Left side) -->
@@ -243,14 +242,7 @@
                             Content="📂 Open Suite"
                             Style="{StaticResource SuccessButton}"
                             Click="BtnOpenSuite_Click"
-                            Margin="0,0,10,0"
                             Width="160"/>
-
-                    <Button Grid.Column="4"
-                            Content="Continue Without Suite"
-                            Style="{StaticResource SecondaryButton}"
-                            Click="BtnContinue_Click"
-                            Width="180"/>
                 </Grid>
             </Border>
         </Grid>

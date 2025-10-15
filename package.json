@@ -7,6 +7,7 @@
     "build": "tsc && npm run copy:assets",
     "copy:assets": "node -e \"require('fs').cpSync('src/ui/index.html', 'dist/ui/index.html')\"",
     "start": "node dist/index.js",
+    "browser": "node dist/browser/browserServer.js",
     "gui": "node dist/gui-server.js",
     "dev": "ts-node src/index.ts",
     "recorder:web": "ts-node src/recorders/web/webRecorder.ts",

@@ -50,30 +50,43 @@ export class WebRecorder {
   }
 
   async start(url?: string): Promise<void> {
-    console.log('🎬 Starting Web Recorder...');
+    console.log('═'.repeat(80));
+    console.log('🎬 WEB RECORDER START');
+    console.log(`📋 Test Case ID: ${this.testCaseId}`);
+    console.log(`📋 Test Name: ${this.config.testName}`);
+    console.log(`📋 Output Path: ${this.config.outputPath}`);
+    console.log(`📋 Start URL: ${url || this.config.startUrl}`);
+    console.log(`📋 Continue Existing: ${this.config.continueExisting}`);
+    console.log(`📋 Current Working Directory: ${process.cwd()}`);
+    console.log('═'.repeat(80));
 
     // If continuing existing test, load existing actions
     if (this.config.continueExisting) {
       const testFilePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
+      console.log(`🔄 CONTINUE MODE ENABLED`);
+      console.log(`📂 Looking for existing test at: ${testFilePath}`);
       if (fs.existsSync(testFilePath)) {
-        console.log(`📂 Loading existing test from ${testFilePath}`);
+        console.log(`✅ Found existing test file!`);
         const existingTest = JSON.parse(fs.readFileSync(testFilePath, 'utf-8'));
         this.actions = existingTest.actions || [];
         console.log(`✅ Loaded ${this.actions.length} existing actions - new actions will be appended`);
       } else {
         console.log(`⚠️ Continue flag set but no existing test found at ${testFilePath} - starting fresh`);
       }
+    } else {
+      console.log(`🆕 NEW TEST MODE - Will create new test from scratch`);
     }
 
-    // Enable recording EARLY so Start Browser action gets saved
+    // Enable recording EARLY
     this.recording = true;
 
-    // Check if browser is already open (from test execution or previous recording)
+    // Check if browser is already open (from test execution, Open Browser button, or previous recording)
+    console.log('🔍 Checking if browser is already open...');
     const browserAlreadyOpen = browserManager.isBrowserOpen();
-    console.log(`🔍 Browser already open check: ${browserAlreadyOpen}`);
+    console.log(`🔍 Browser already open: ${browserAlreadyOpen}`);
 
-    // For NEW tests (not continuing), always add Start Browser action
-    if (!this.config.continueExisting) {
+    // Only add start_browser action if browser is NOT already open
+    if (!browserAlreadyOpen && !this.config.continueExisting) {
       await this.addAction({
         type: ActionType.CUSTOM,
         value: 'start_browser',
@@ -90,27 +103,10 @@ export class WebRecorder {
       await this.setupEventListeners();
       console.log('✅ Event listeners set up');
 
-      // Get current URL
+      // Get current URL - no navigation needed, user already navigated manually
       const currentUrl = this.page!.url();
-      const targetUrl = url || this.config.startUrl;
-
-      // Only navigate if we need to go to a different URL
-      if (targetUrl && currentUrl !== targetUrl) {
-        console.log(`🔄 Navigating from ${currentUrl} to ${targetUrl}`);
-        await this.page!.goto(targetUrl);
-        await this.page!.waitForLoadState('domcontentloaded');
-      } else {
-        console.log(`✅ Already at ${currentUrl} - continuing from current page`);
-      }
-
-      // For NEW tests, record the initial navigation so test knows where to start
-      if (!this.config.continueExisting && targetUrl) {
-        this.addAction({
-          type: ActionType.NAVIGATE,
-          value: targetUrl,
-          description: `Navigate to ${targetUrl}`
-        });
-      }
+      console.log(`✅ Recording from current page: ${currentUrl}`);
+      console.log(`💡 Browser is already open - no duplicate navigate action will be added`);
 
       // Inject event listeners AFTER navigation check
       console.log('💉 Injecting event listeners...');
@@ -134,20 +130,28 @@ export class WebRecorder {
       await this.setupEventListeners();
       console.log('✅ Event listeners set up');
 
-      // Navigate to start URL if provided
-      if (url || this.config.startUrl) {
-        const targetUrl = url || this.config.startUrl!;
-        await this.page.goto(targetUrl);
+      // Navigate to start URL if provided (but NOT in continue mode)
+      if (!this.config.continueExisting) {
+        const targetUrl = url || this.config.startUrl;
+        if (targetUrl && targetUrl !== 'about:blank') {
+          console.log(`🔄 Navigating to: ${targetUrl}`);
+          await this.page.goto(targetUrl);
 
-        // Wait for page to load
-        await this.page.waitForLoadState('domcontentloaded');
+          // Wait for page to load
+          await this.page.waitForLoadState('domcontentloaded');
 
-        // Record INITIAL navigation only (so test knows where to start)
-        this.addAction({
-          type: ActionType.NAVIGATE,
-          value: targetUrl,
-          description: `Navigate to ${targetUrl}`
-        });
+          // Record INITIAL navigation only (so test knows where to start)
+          this.addAction({
+            type: ActionType.NAVIGATE,
+            value: targetUrl,
+            description: `Navigate to ${targetUrl}`
+          });
+        } else {
+          console.log('⚠️ No URL provided - browser will open to blank page');
+          console.log('💡 Navigate manually to start recording');
+        }
+      } else {
+        console.log('🔄 CONTINUE MODE: Browser opened but NOT navigating - user will manually navigate');
       }
 
       // Inject event listeners AFTER navigation (so page is loaded)
@@ -170,97 +174,109 @@ export class WebRecorder {
   private async injectRecorderScript(): Promise<void> {
     if (!this.page) return;
 
-    await this.page.addInitScript(() => {
-      // Check if already injected
-      if (document.getElementById('qa-recorder-overlay')) {
-        return;
-      }
+    const overlayScript = `
+      (function() {
+        // Check if already injected
+        if (document.getElementById('qa-recorder-overlay')) {
+          return;
+        }
 
-      // Inject recording UI overlay
-      const overlay = document.createElement('div');
-      overlay.id = 'qa-recorder-overlay';
-      overlay.style.cssText = `
-        position: fixed;
-        top: 10px;
-        right: 10px;
-        background: linear-gradient(135deg, #f44336, #e91e63);
-        color: white;
-        padding: 12px 20px;
-        border-radius: 8px;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-        font-weight: bold;
-        z-index: 2147483647;
-        box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
-        cursor: move;
-        user-select: none;
-        pointer-events: auto;
-        backdrop-filter: blur(10px);
-      `;
-      overlay.innerHTML = '🔴 Recording...';
+        // Inject recording UI overlay
+        const overlay = document.createElement('div');
+        overlay.id = 'qa-recorder-overlay';
+        overlay.style.cssText = \`
+          position: fixed;
+          top: 10px;
+          right: 10px;
+          background: linear-gradient(135deg, #f44336, #e91e63);
+          color: white;
+          padding: 12px 20px;
+          border-radius: 8px;
+          font-family: Arial, sans-serif;
+          font-size: 14px;
+          font-weight: bold;
+          z-index: 2147483647;
+          box-shadow: 0 4px 15px rgba(244, 67, 54, 0.4);
+          cursor: move;
+          user-select: none;
+          pointer-events: auto;
+          backdrop-filter: blur(10px);
+        \`;
+        overlay.innerHTML = '🔴 Recording...';
 
-      // Make overlay draggable
-      let isDragging = false;
-      let currentX = 0;
-      let currentY = 0;
-      let initialX = 0;
-      let initialY = 0;
+        // Make overlay draggable
+        let isDragging = false;
+        let currentX = 0;
+        let currentY = 0;
+        let initialX = 0;
+        let initialY = 0;
 
-      overlay.addEventListener('mousedown', (e) => {
-        e.stopPropagation();
-        isDragging = true;
-        initialX = e.clientX - currentX;
-        initialY = e.clientY - currentY;
-        overlay.style.cursor = 'grabbing';
-      });
-
-      document.addEventListener('mousemove', (e) => {
-        if (isDragging) {
-          e.preventDefault();
+        overlay.addEventListener('mousedown', (e) => {
           e.stopPropagation();
-          currentX = e.clientX - initialX;
-          currentY = e.clientY - initialY;
+          isDragging = true;
+          initialX = e.clientX - currentX;
+          initialY = e.clientY - currentY;
+          overlay.style.cursor = 'grabbing';
+        });
 
-          overlay.style.right = 'auto';
-          overlay.style.top = 'auto';
-          overlay.style.left = currentX + 'px';
-          overlay.style.top = currentY + 'px';
+        document.addEventListener('mousemove', (e) => {
+          if (isDragging) {
+            e.preventDefault();
+            e.stopPropagation();
+            currentX = e.clientX - initialX;
+            currentY = e.clientY - initialY;
+
+            overlay.style.right = 'auto';
+            overlay.style.top = 'auto';
+            overlay.style.left = currentX + 'px';
+            overlay.style.top = currentY + 'px';
+          }
+        });
+
+        document.addEventListener('mouseup', () => {
+          if (isDragging) {
+            isDragging = false;
+            overlay.style.cursor = 'move';
+          }
+        });
+
+        // Append overlay
+        const appendOverlay = () => {
+          if (!document.getElementById('qa-recorder-overlay')) {
+            document.body.appendChild(overlay);
+          }
+        };
+
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', appendOverlay);
+        } else {
+          appendOverlay();
         }
-      });
 
-      document.addEventListener('mouseup', () => {
-        if (isDragging) {
-          isDragging = false;
-          overlay.style.cursor = 'move';
-        }
-      });
+        // Highlight elements on hover (but not the overlay)
+        let lastHighlighted = null;
+        document.addEventListener('mouseover', (e) => {
+          const target = e.target;
+          if (target.id === 'qa-recorder-overlay' || target.closest('#qa-recorder-overlay')) return;
 
-      // Append overlay
-      const appendOverlay = () => {
-        if (!document.getElementById('qa-recorder-overlay')) {
-          document.body.appendChild(overlay);
-        }
-      };
+          if (lastHighlighted) {
+            lastHighlighted.style.outline = '';
+          }
+          target.style.outline = '2px solid #4CAF50';
+          lastHighlighted = target;
+        }, true);
+      })();
+    `;
 
-      if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', appendOverlay);
-      } else {
-        appendOverlay();
-      }
+    try {
+      // Inject on current page immediately
+      await this.page.evaluate(overlayScript);
 
-      // Highlight elements on hover (but not the overlay)
-      let lastHighlighted: HTMLElement | null = null;
-      document.addEventListener('mouseover', (e) => {
-        const target = e.target as HTMLElement;
-        if (target.id === 'qa-recorder-overlay' || target.closest('#qa-recorder-overlay')) return;
-
-        if (lastHighlighted) {
-          lastHighlighted.style.outline = '';
-        }
-        target.style.outline = '2px solid #4CAF50';
-        lastHighlighted = target;
-      }, true);
-    });
+      // Also add to init script for future navigations
+      await this.page.addInitScript(overlayScript);
+    } catch (error) {
+      console.error('❌ Error injecting recorder overlay:', error);
+    }
   }
 
   private async setupEventListeners(): Promise<void> {
@@ -555,7 +571,7 @@ export class WebRecorder {
               } else {
                 console.error('❌ recordInput function not available!');
               }
-            }, 1000); // Wait 1 second after user stops typing
+            }, 300); // Wait 300ms after user stops typing (reduced from 1000ms)
           }, true);
 
         console.log('✅ Event listeners injected successfully!');
@@ -743,27 +759,25 @@ export class WebRecorder {
     // Don't auto-add close_browser - let user add it manually if needed
     // Browser will stay open for reuse between tests
 
-    // Check if test file already exists - if so, append new actions instead of replacing
+    // Note: saveProgress() already saves actions after each step,
+    // so this.actions already contains all recorded actions.
+    // We don't need to load and re-append from file (that causes duplicates!)
+
     const testCasePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
-    let existingActions: TestAction[] = [];
     let createdAt = Date.now();
 
+    // Check if file exists to preserve createdAt timestamp
     if (fs.existsSync(testCasePath)) {
-      console.log('📝 Appending to existing test case...');
       const existingTest = JSON.parse(fs.readFileSync(testCasePath, 'utf-8'));
-      existingActions = existingTest.actions || [];
       createdAt = existingTest.createdAt || Date.now();
     }
-
-    // Combine existing and new actions
-    const allActions = [...existingActions, ...this.actions];
 
     const testCase: TestCase = {
       id: this.testCaseId,
       name: this.config.testName || 'Recorded Web Test',
       description: 'Test case recorded from web browser',
       platform: PlatformType.WEB,
-      actions: allActions,  // Combined actions
+      actions: this.actions,  // Use this.actions directly (already saved by saveProgress)
       createdAt: createdAt,
       updatedAt: Date.now()
     };
@@ -782,11 +796,7 @@ export class WebRecorder {
     fs.writeFileSync(objectRepoPath, JSON.stringify(objectsArray, null, 2));
 
     console.log(`✅ Test case saved: ${testCasePath}`);
-    if (existingActions.length > 0) {
-      console.log(`📊 Total actions: ${allActions.length} (${existingActions.length} existing + ${this.actions.length} new)`);
-    } else {
-      console.log(`📊 Total actions recorded: ${this.actions.length}`);
-    }
+    console.log(`📊 Total actions recorded: ${this.actions.length}`);
     console.log(`📦 Objects captured: ${objectsArray.length}`);
     console.log(`💾 Object repository saved: ${objectRepoPath}`);
     console.log('🌐 Browser kept open for next recording');

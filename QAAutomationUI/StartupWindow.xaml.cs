@@ -154,13 +154,6 @@ namespace QAAutomationUI
             }
         }
 
-        private void BtnContinue_Click(object sender, RoutedEventArgs e)
-        {
-            SelectedSuitePath = null;
-            DialogResult = true;
-            Close();
-        }
-
         private void LstSuites_MouseDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (lstSuites.SelectedItem != null)
@@ -186,13 +179,14 @@ namespace QAAutomationUI
                     return;
                 }
 
-                var result = MessageBox.Show(
+                var result = ModernMessageBox.Show(
                     $"Are you sure you want to delete the test suite '{suiteName}'?\n\nThis will delete all test cases inside it.\n\nThis action cannot be undone.",
                     "Confirm Delete",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
+                    ModernMessageBoxType.Warning,
+                    ModernMessageBoxButtons.YesNo,
+                    this);
 
-                if (result == MessageBoxResult.Yes)
+                if (result == ModernMessageBoxResult.Yes)
                 {
                     try
                     {
@@ -202,7 +196,7 @@ namespace QAAutomationUI
                         if (Directory.Exists(suiteFolder))
                         {
                             Directory.Delete(suiteFolder, true); // Delete folder and all contents
-                            MessageBox.Show($"Test suite '{suiteName}' and all its test cases have been deleted successfully.", "Deleted", MessageBoxButton.OK, MessageBoxImage.Information);
+                            ModernMessageBox.Show($"Test suite '{suiteName}' and all its test cases have been deleted successfully.", "Deleted", ModernMessageBoxType.Success, ModernMessageBoxButtons.OK, this);
 
                             // Refresh the list
                             lstSuites.Items.Clear();

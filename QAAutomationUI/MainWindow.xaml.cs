@@ -51,6 +51,7 @@ namespace QAAutomationUI
     public partial class MainWindow : Window
     {
         private Process? recordingProcess;
+        private Process? browserServerProcess;
         private string backendPath;
         private ObservableCollection<TestCaseInfo> testCases = new ObservableCollection<TestCaseInfo>();
         private ObservableCollection<TestStepInfo> testSteps = new ObservableCollection<TestStepInfo>();
@@ -133,6 +134,9 @@ namespace QAAutomationUI
                         AppendOutput($"🔧 Backend: {backendPath}\n");
                         AppendOutput($"🔍 Backend exists: {File.Exists(backendPath)}\n");
 
+                        // Start persistent browser server
+                        StartBrowserServer();
+
                         // DEBUG: Show context menu items on load
                         AppendOutput("\n🐛 DEBUG: Checking context menu items...\n");
                         if (testStepsContextMenu != null)
@@ -155,6 +159,12 @@ namespace QAAutomationUI
                         {
                             AppendOutput("   ❌ testStepsContextMenu is NULL!\n");
                         }
+                    };
+
+                    // Clean up browser server when window closes
+                    this.Closing += (s, e) =>
+                    {
+                        StopBrowserServer();
                     };
                 }
                 else
@@ -193,7 +203,6 @@ namespace QAAutomationUI
 
                 // Ensure window is visible
                 this.Visibility = Visibility.Visible;
-                this.WindowState = WindowState.Normal;
                 this.Topmost = true;
                 this.Loaded += (s, e) =>
                 {
@@ -201,9 +210,18 @@ namespace QAAutomationUI
                     this.Activate();
                     LoadTestCases(); // Load test cases when window loads
 
+                    // Start persistent browser server
+                    StartBrowserServer();
+
                     // Add Navigate to URL menu item after window is fully loaded
                     AppendOutput("🔧 Attempting to add Navigate to URL menu item...\n");
                     AddNavigateToUrlMenuItem();
+                };
+
+                // Clean up browser server when window closes
+                this.Closing += (s, e) =>
+                {
+                    StopBrowserServer();
                 };
             }
             catch (Exception ex)
@@ -273,6 +291,66 @@ namespace QAAutomationUI
             }
         }
 
+        private async void BtnOpenBrowser_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Check if suite URL is configured
+                if (string.IsNullOrWhiteSpace(suiteUrl))
+                {
+                    MessageBox.Show("No URL configured for this suite. Please edit suite configuration.", "Validation", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                AppendOutput("\n🌐 Opening browser...\n");
+                AppendOutput($"📍 Navigating to: {suiteUrl}\n");
+
+                string nodeExe = "node";
+                string distPath = Path.Combine(Directory.GetCurrentDirectory(), "dist", "index.js");
+                string args = $"\"{distPath}\" open-browser --url \"{suiteUrl}\"";
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = nodeExe,
+                    Arguments = args,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Directory.GetCurrentDirectory()
+                };
+
+                var process = new Process { StartInfo = startInfo };
+
+                process.OutputDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("  " + ev.Data + "\n"));
+                    }
+                };
+
+                process.ErrorDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("  ❌ " + ev.Data + "\n"));
+                    }
+                };
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                AppendOutput("💡 Browser opened and navigated to suite URL!\n");
+                AppendOutput("💡 You can now start recording actions.\n");
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Failed to open browser: {ex.Message}\n");
+            }
+        }
+
         private void BtnStartRecording_Click(object sender, RoutedEventArgs e)
         {
             string testName = txtTestName.Text;
@@ -325,6 +403,82 @@ namespace QAAutomationUI
                 // Clear test name for next test
                 txtTestName.Clear();
                 return;
+            }
+
+            // Check if browser has pages open (not just if browser server is running)
+            bool needToOpenBrowser = false;
+            string nodeExe = "node";
+            string distPath = Path.Combine(Directory.GetCurrentDirectory(), "dist", "index.js");
+
+            // Check if browser has any pages
+            var checkPagesStartInfo = new ProcessStartInfo
+            {
+                FileName = nodeExe,
+                Arguments = $"\"{distPath}\" check-browser-pages",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WorkingDirectory = Directory.GetCurrentDirectory()
+            };
+
+            var checkProcess = new Process { StartInfo = checkPagesStartInfo };
+            checkProcess.Start();
+            string checkOutput = checkProcess.StandardOutput.ReadToEnd();
+            checkProcess.WaitForExit();
+
+            AppendOutput($"🔍 Checking browser state...\n");
+            AppendOutput($"  {checkOutput}\n");
+
+            // Parse the output to see if pages exist
+            bool hasPages = checkOutput.Contains("HAS_PAGES:true");
+
+            if (!hasPages)
+            {
+                AppendOutput("\n🌐 No browser pages detected - opening browser with URL...\n");
+
+                // Call the Open Browser logic (without --wait so it exits after opening)
+                string openBrowserArgs = $"\"{distPath}\" open-browser --url \"{suiteUrl}\"";
+
+                var openBrowserStartInfo = new ProcessStartInfo
+                {
+                    FileName = nodeExe,
+                    Arguments = openBrowserArgs,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Directory.GetCurrentDirectory()
+                };
+
+                var openBrowserProcess = new Process { StartInfo = openBrowserStartInfo };
+                openBrowserProcess.Start();
+
+                // Read output synchronously (simpler, no deadlock risk)
+                string output = openBrowserProcess.StandardOutput.ReadToEnd();
+                string errorOutput = openBrowserProcess.StandardError.ReadToEnd();
+
+                openBrowserProcess.WaitForExit(10000); // 10 second timeout
+
+                if (!string.IsNullOrWhiteSpace(output))
+                {
+                    AppendOutput(output + "\n");
+                }
+
+                if (!string.IsNullOrWhiteSpace(errorOutput))
+                {
+                    AppendOutput("❌ " + errorOutput + "\n");
+                }
+
+                AppendOutput("✅ Browser opened and navigated to URL!\n");
+                AppendOutput("⏳ Giving browser a moment to stabilize...\n");
+
+                // Give browser a moment to fully load the page
+                System.Threading.Thread.Sleep(2000);
+            }
+            else
+            {
+                AppendOutput("\n✅ Browser already has pages open - reusing session...\n");
             }
 
             // Create tests directory using the same path from duplicate check
@@ -748,6 +902,95 @@ namespace QAAutomationUI
             });
         }
 
+        private void StartBrowserServer()
+        {
+            try
+            {
+                // Check if browser server is already running
+                if (browserServerProcess != null && !browserServerProcess.HasExited)
+                {
+                    AppendOutput("💡 Browser server already running - skipping start\n");
+                    return;
+                }
+
+                AppendOutput("\n🌐 Starting persistent browser server...\n");
+
+                string nodeExe = "node";
+                string browserServerPath = Path.Combine(Directory.GetCurrentDirectory(), "dist", "browser", "browserServer.js");
+
+                if (!File.Exists(browserServerPath))
+                {
+                    AppendOutput($"⚠️ Browser server not found at: {browserServerPath}\n");
+                    AppendOutput("⚠️ Browser reuse features may not work correctly\n");
+                    return;
+                }
+
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = nodeExe,
+                    Arguments = $"\"{browserServerPath}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    WorkingDirectory = Directory.GetCurrentDirectory()
+                };
+
+                browserServerProcess = new Process { StartInfo = startInfo };
+
+                browserServerProcess.OutputDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("  [Browser] " + ev.Data + "\n"));
+                    }
+                };
+
+                browserServerProcess.ErrorDataReceived += (s, ev) =>
+                {
+                    if (!string.IsNullOrEmpty(ev.Data))
+                    {
+                        Dispatcher.Invoke(() => AppendOutput("  [Browser Error] " + ev.Data + "\n"));
+                    }
+                };
+
+                browserServerProcess.Start();
+                browserServerProcess.BeginOutputReadLine();
+                browserServerProcess.BeginErrorReadLine();
+
+                AppendOutput("✅ Browser server started successfully!\n");
+                AppendOutput("💡 Tests and recordings will now reuse the same browser\n\n");
+            }
+            catch (Exception ex)
+            {
+                AppendOutput($"❌ Failed to start browser server: {ex.Message}\n");
+                AppendOutput("⚠️ Will fall back to opening individual browsers\n");
+            }
+        }
+
+        private void StopBrowserServer()
+        {
+            if (browserServerProcess != null && !browserServerProcess.HasExited)
+            {
+                try
+                {
+                    AppendOutput("\n🛑 Stopping browser server...\n");
+                    browserServerProcess.Kill(true); // Kill process tree
+                    browserServerProcess.WaitForExit(2000);
+                    AppendOutput("✅ Browser server stopped\n");
+                }
+                catch (Exception ex)
+                {
+                    AppendOutput($"⚠️ Error stopping browser server: {ex.Message}\n");
+                }
+                finally
+                {
+                    browserServerProcess?.Dispose();
+                    browserServerProcess = null;
+                }
+            }
+        }
+
         private void UpdateStatus(string text, Brush color)
         {
             Dispatcher.Invoke(() =>
@@ -1045,13 +1288,14 @@ namespace QAAutomationUI
         {
             if (sender is System.Windows.Controls.Button btn && btn.Tag is string filePath)
             {
-                var result = MessageBox.Show(
+                var result = ModernMessageBox.Show(
                     $"Are you sure you want to delete this test case?\n\n{Path.GetFileName(filePath)}",
                     "Confirm Delete",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Warning);
+                    ModernMessageBoxType.Warning,
+                    ModernMessageBoxButtons.YesNo,
+                    this);
 
-                if (result == MessageBoxResult.Yes)
+                if (result == ModernMessageBoxResult.Yes)
                 {
                     try
                     {
@@ -1059,10 +1303,16 @@ namespace QAAutomationUI
                         AppendOutput($"🗑️ Deleted test case: {Path.GetFileName(filePath)}\n");
                         LoadTestCases();
                         testSteps.Clear();
+                        ModernMessageBox.Show(
+                            $"Test case '{Path.GetFileName(filePath)}' has been deleted successfully.",
+                            "Deleted",
+                            ModernMessageBoxType.Success,
+                            ModernMessageBoxButtons.OK,
+                            this);
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show($"Error deleting test case: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        ModernMessageBox.Show($"Error deleting test case: {ex.Message}", "Error", ModernMessageBoxType.Error, ModernMessageBoxButtons.OK, this);
                     }
                 }
             }
@@ -1898,24 +2148,26 @@ namespace QAAutomationUI
 
             var selectedStep = (TestStepInfo)dgTestSteps.SelectedItem;
 
-            // Check if browser is already open
-            var result = MessageBox.Show(
-                "Is the browser already open at the correct state?\n\n" +
-                "Click YES if you just ran this test and the browser is still open.\n" +
-                "Click NO to execute steps 1-" + selectedStep.StepNumber + " first.",
-                "Browser State",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question);
+            // Ask user if they want auto-setup or manual
+            var result = ModernMessageBox.Show(
+                $"Do you want to automatically execute steps 1-{selectedStep.StepNumber} before recording?\n\n" +
+                "• YES - Auto-execute previous steps to reach the correct state\n" +
+                "• NO - Recording starts immediately (use current browser state)\n\n" +
+                "Note: The existing browser will be reused for recording.",
+                "Start Recording from Here",
+                ModernMessageBoxType.Question,
+                ModernMessageBoxButtons.YesNoCancel,
+                this);
 
-            if (result == MessageBoxResult.Cancel)
+            if (result == ModernMessageBoxResult.Cancel)
                 return;
 
             try
             {
-                if (result == MessageBoxResult.No)
+                if (result == ModernMessageBoxResult.Yes)
                 {
                     // Execute all steps up to the selected one to get to that state
-                    AppendOutput($"\n🎬 Executing steps 1-{selectedStep.StepNumber} to reach recording point...\n");
+                    AppendOutput($"\n🎬 Auto-executing steps 1-{selectedStep.StepNumber} to reach recording point...\n");
 
                     // Create a temporary test case with only the steps up to the selected one
                     string testJson = File.ReadAllText(currentTestFilePath);
@@ -1946,11 +2198,12 @@ namespace QAAutomationUI
                         File.Delete(tempPath);
                     }
 
-                    AppendOutput($"✅ Setup complete. Starting recorder...\n");
+                    AppendOutput($"✅ Auto-setup complete. Now starting recorder...\n");
                 }
-                else
+                else if (result == ModernMessageBoxResult.No)
                 {
-                    AppendOutput($"✅ Using existing browser. Starting recorder to continue from step {selectedStep.StepNumber}...\n");
+                    AppendOutput($"✅ Manual navigation selected.\n");
+                    AppendOutput($"📝 Recorder will open a new browser. Please manually navigate to the correct state before recording.\n");
                 }
 
                 // Start web recorder with the CURRENT test file (not a new test)

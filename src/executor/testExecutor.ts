@@ -127,14 +127,11 @@ export class TestExecutor {
                             action.description?.includes('Start Browser');
 
       if (isStartBrowser) {
-        if (browserManager.isBrowserOpen()) {
-          console.log('   ✨ Browser already open - reusing existing session');
-        } else {
-          console.log('   🌐 Starting browser...');
-          await browserManager.getBrowser();
-          await browserManager.getContext();
-          await browserManager.getPage();
-        }
+        console.log('   🌐 Ensuring browser is ready...');
+        await browserManager.getBrowser();
+        await browserManager.getContext();
+        await browserManager.getPage();
+        console.log('   ✅ Browser ready');
 
         // If value is a URL (not "start_browser"), navigate to it
         if (action.value && action.value !== 'start_browser' && action.value.startsWith('http')) {

@@ -38,12 +38,16 @@ async function startBrowserServer() {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     // Get the actual WebSocket endpoint from Chrome's debugging API
-    const cdpEndpoint = `http://localhost:9223`;
+    // IMPORTANT: Use 127.0.0.1 instead of localhost to force IPv4 (avoids ::1 IPv6 issues)
+    const cdpEndpoint = `http://127.0.0.1:9223`;
     console.log(`📍 Querying CDP endpoint: ${cdpEndpoint}/json/version`);
 
     const response = await fetch(`${cdpEndpoint}/json/version`);
     const versionInfo = await response.json();
-    const wsEndpoint = versionInfo.webSocketDebuggerUrl;
+    let wsEndpoint = versionInfo.webSocketDebuggerUrl;
+
+    // Replace localhost with 127.0.0.1 in WebSocket URL to force IPv4
+    wsEndpoint = wsEndpoint.replace('localhost', '127.0.0.1');
 
     // Save the WebSocket endpoint for other processes to connect
     fs.writeFileSync(CDP_ENDPOINT_FILE, wsEndpoint, 'utf-8');

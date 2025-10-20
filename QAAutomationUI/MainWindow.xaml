@@ -513,6 +513,7 @@
                                   CanUserAddRows="False"
                                   CanUserDeleteRows="False"
                                   CanUserResizeRows="False"
+                                  CellEditEnding="DgTestSteps_CellEditEnding"
                                   SelectionMode="Single"
                                   HeadersVisibility="Column"
                                   GridLinesVisibility="None"
@@ -531,6 +532,7 @@
                                         <MenuItem Header="🌐 Open Browser" Click="MenuAddOpenBrowser_Click"/>
                                         <MenuItem Header="🔴 Close Browser" Click="MenuAddCloseBrowser_Click"/>
                                         <Separator/>
+                                        <MenuItem Header="⌨️ Press Key" Click="MenuAddPressKey_Click"/>
                                         <MenuItem Header="⏱️ Add Delay" Click="MenuAddDelay_Click"/>
                                         <MenuItem Header="⏳ Add Wait For Element" Click="MenuAddWaitFor_Click"/>
                                     </MenuItem>

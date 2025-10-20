@@ -53,11 +53,46 @@ export class TestSuiteManager {
 
   /**
    * Load a test suite from disk
+   * Supports both flat file structure and folder-based structure
    */
   loadSuite(suiteId: string): TestSuite {
+    // Try folder-based structure first (test-suites/suite-name/suite-config.json)
+    const folderConfigPath = path.join(this.suitesDir, suiteId, 'suite-config.json');
+    if (fs.existsSync(folderConfigPath)) {
+      const content = fs.readFileSync(folderConfigPath, 'utf-8');
+      const config = JSON.parse(content);
+
+      // If config doesn't have testCases array, scan the tests folder
+      if (!config.testCases || config.testCases.length === 0) {
+        const testsDir = path.join(this.suitesDir, suiteId, 'tests');
+        if (fs.existsSync(testsDir)) {
+          const testFiles = fs.readdirSync(testsDir)
+            .filter(f => f.endsWith('.json'))
+            .map(f => path.join(testsDir, f));
+          config.testCases = testFiles;
+        } else {
+          config.testCases = [];
+        }
+      }
+
+      // Ensure required fields exist
+      config.id = config.id || suiteId;
+      config.name = config.name || suiteId;
+      config.description = config.description || '';
+      config.createdAt = config.createdAt ? new Date(config.createdAt).getTime() : Date.now();
+      config.updatedAt = config.updatedAt ? new Date(config.updatedAt).getTime() : Date.now();
+
+      return config;
+    }
+
+    // Fall back to flat file structure (test-suites/suite-id.json)
     const filePath = path.join(this.suitesDir, `${suiteId}.json`);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(content);
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return JSON.parse(content);
+    }
+
+    throw new Error(`Suite not found: ${suiteId}`);
   }
 
   /**

@@ -312,6 +312,21 @@ export class WebRecorder {
       });
     });
 
+    await this.page.exposeFunction('recordKeyPress', async (objectData: any, key: string) => {
+      console.log(`⌨️ Key press recorded: ${key} on ${objectData.selector}`);
+
+      // Store object in repository
+      const objectId = this.storeObject(objectData);
+
+      await this.addAction({
+        type: ActionType.PRESS_KEY,
+        target: await this.createLocator(objectData.selector, objectData.xpath),
+        value: key,
+        description: `Press ${key} key on ${objectData.placeholder || objectData.name || objectData.selector}`,
+        objectId: objectId
+      });
+    });
+
     // Listen for dialogs (alerts, confirms, prompts)
     this.page.on('dialog', async (dialog) => {
       console.log(`🔔 Dialog detected: ${dialog.type()} - ${dialog.message()}`);
@@ -401,6 +416,20 @@ export class WebRecorder {
           });
         });
 
+        await newPage.exposeFunction('recordKeyPress', async (objectData: any, key: string) => {
+          console.log(`⌨️ Key press recorded in tab #${pageIndex}: ${key} on ${objectData.selector}`);
+
+          const objectId = this.storeObject(objectData);
+
+          await this.addAction({
+            type: ActionType.PRESS_KEY,
+            target: await this.createLocator(objectData.selector, objectData.xpath),
+            value: key,
+            description: `Press ${key} key on ${objectData.placeholder || objectData.name || objectData.selector}`,
+            objectId: objectId
+          });
+        });
+
         // Re-inject recorder overlay and event listeners
         console.log(`💉 Injecting event listeners for tab #${pageIndex}...`);
         await this.injectRecorderScript();
@@ -447,6 +476,79 @@ export class WebRecorder {
         console.log('🎯 Injecting event listeners for recording...');
         console.log('🔍 Checking exposed functions:', typeof window.recordClick, typeof window.recordInput);
 
+          // Helper function to generate full/absolute XPath with modal detection
+          window.getFullXPath = function(element) {
+            if (element.id) {
+              // If element has ID, use short XPath
+              return '//' + element.tagName.toLowerCase() + '[@id="' + element.id + '"]';
+            }
+
+            var path = '';
+            var currentElement = element;
+
+            // Check if element is inside a modal (detect by traversing up to find modal container)
+            var isInModal = false;
+            var modalContainer = null;
+            var tempEl = element;
+            while (tempEl && tempEl !== document.body) {
+              // Detect modal patterns: role="dialog", class contains "modal", or direct child of body with no class
+              if (tempEl.getAttribute('role') === 'dialog' ||
+                  (tempEl.className && typeof tempEl.className === 'string' && tempEl.className.includes('modal')) ||
+                  (tempEl.parentNode === document.body && tempEl.tagName === 'DIV')) {
+                isInModal = true;
+                modalContainer = tempEl;
+                break;
+              }
+              tempEl = tempEl.parentNode;
+            }
+
+            // Generate XPath
+            for (; currentElement && currentElement.nodeType == 1; currentElement = currentElement.parentNode) {
+              var index = 0;
+              var hasFollowingSiblings = false;
+
+              for (var sibling = currentElement.previousSibling; sibling; sibling = sibling.previousSibling) {
+                if (sibling.nodeType == Node.DOCUMENT_TYPE_NODE) continue;
+                if (sibling.nodeName == currentElement.nodeName) ++index;
+              }
+              for (var sibling = currentElement.nextSibling; sibling && !hasFollowingSiblings; sibling = sibling.nextSibling) {
+                if (sibling.nodeName == currentElement.nodeName) hasFollowingSiblings = true;
+              }
+
+              var tagName = currentElement.nodeName.toLowerCase();
+              var pathIndex = '';
+
+              // For modal containers: use LAST div (highest index) instead of counting from start
+              // This makes it more stable when other divs are added/removed before the modal
+              if (isInModal && currentElement.parentNode === document.body && tagName === 'div') {
+                // Count total divs under body
+                var totalDivs = 0;
+                var modalPosition = 0;
+                var bodyDivs = document.body.querySelectorAll('body > div');
+                for (var i = 0; i < bodyDivs.length; i++) {
+                  totalDivs++;
+                  if (bodyDivs[i] === currentElement) {
+                    modalPosition = i + 1;
+                  }
+                }
+
+                // Use position from end: last() for last, last()-1 for second to last, etc.
+                if (modalPosition === totalDivs) {
+                  pathIndex = '[last()]';
+                } else {
+                  var fromEnd = totalDivs - modalPosition;
+                  pathIndex = '[last()-' + fromEnd + ']';
+                }
+              } else {
+                // Normal XPath index
+                pathIndex = (index || hasFollowingSiblings ? '[' + (index + 1) + ']' : '');
+              }
+
+              path = '/' + tagName + pathIndex + path;
+            }
+            return path;
+          };
+
           // Helper function to capture full object data
           window.captureObjectData = function(element) {
             var attributes = {};
@@ -459,64 +561,47 @@ export class WebRecorder {
             var selector = '';
             var xpath = '';
 
+            // Always generate full XPath for maximum reliability
+            var fullXPath = window.getFullXPath(element);
+
+            // ALWAYS use full XPath for maximum reliability
+            xpath = fullXPath;
+
+            // Generate CSS selector for fallback
             // Try ID first (most stable)
             if (element.id) {
               selector = '#' + element.id;
-              xpath = '//' + element.tagName.toLowerCase() + '[@id="' + element.id + '"]';
             }
             // Try name attribute
             else if (element.getAttribute('name')) {
               selector = '[name="' + element.getAttribute('name') + '"]';
-              xpath = '//' + element.tagName.toLowerCase() + '[@name="' + element.getAttribute('name') + '"]';
             }
             // Try placeholder
             else if (element.getAttribute('placeholder')) {
               selector = '[placeholder="' + element.getAttribute('placeholder') + '"]';
-              xpath = '//' + element.tagName.toLowerCase() + '[@placeholder="' + element.getAttribute('placeholder') + '"]';
             }
             // Try aria-label
             else if (element.getAttribute('aria-label')) {
               selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
-              xpath = '//' + element.tagName.toLowerCase() + '[@aria-label="' + element.getAttribute('aria-label') + '"]';
             }
             // Try data-testid or data-test
             else if (element.getAttribute('data-testid')) {
               selector = '[data-testid="' + element.getAttribute('data-testid') + '"]';
-              xpath = '//' + element.tagName.toLowerCase() + '[@data-testid="' + element.getAttribute('data-testid') + '"]';
             }
             else if (element.getAttribute('data-test')) {
               selector = '[data-test="' + element.getAttribute('data-test') + '"]';
-              xpath = '//' + element.tagName.toLowerCase() + '[@data-test="' + element.getAttribute('data-test') + '"]';
             }
-            // If element has text content and generic class, use text-based selector
-            else if (text && text.length > 0 && text.length < 50) {
-              // Use XPath with text for better accuracy
-              var textEscaped = text.replace(/'/g, "\\'");
-              xpath = '//' + element.tagName.toLowerCase() + '[normalize-space(text())="' + textEscaped + '"]';
-
-              // For CSS, combine class with text hint (executor will use XPath primarily)
-              if (element.className && typeof element.className === 'string') {
-                var classes = element.className.split(' ').filter(function(c) { return c && !c.startsWith('_'); }).slice(0, 2).join('.');
-                if (classes) selector = element.tagName.toLowerCase() + '.' + classes;
-                else selector = element.tagName.toLowerCase();
-              } else {
-                selector = element.tagName.toLowerCase();
-              }
-            }
-            // Try class as last resort
+            // Try class
             else if (element.className && typeof element.className === 'string') {
               var classes = element.className.split(' ').filter(function(c) { return c && !c.startsWith('_'); }).slice(0, 2).join('.');
               if (classes) {
                 selector = element.tagName.toLowerCase() + '.' + classes;
-                xpath = '//' + element.tagName.toLowerCase() + '[@class="' + element.className + '"]';
               } else {
                 selector = element.tagName.toLowerCase();
-                xpath = '//' + element.tagName.toLowerCase();
               }
             }
             else {
               selector = element.tagName.toLowerCase();
-              xpath = '//' + element.tagName.toLowerCase();
             }
 
             return {
@@ -572,6 +657,26 @@ export class WebRecorder {
                 console.error('❌ recordInput function not available!');
               }
             }, 300); // Wait 300ms after user stops typing (reduced from 1000ms)
+          }, true);
+
+          // Keydown event listener for special keys (Enter, Tab, Escape, etc.)
+          document.addEventListener('keydown', function(e) {
+            // Only record special keys, not regular typing
+            var specialKeys = ['Enter', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12'];
+
+            if (specialKeys.indexOf(e.key) !== -1) {
+              var target = e.target;
+              var objectData = window.captureObjectData(target);
+
+              console.log('⌨️  Key press detected: ' + e.key + ' on ' + (objectData.placeholder || objectData.name || objectData.selector));
+              console.log('   📦 Object - ID: ' + objectData.id + ', Name: ' + objectData.name + ', Type: ' + objectData.type);
+
+              if (window.recordKeyPress) {
+                window.recordKeyPress(objectData, e.key);
+              } else {
+                console.error('❌ recordKeyPress function not available!');
+              }
+            }
           }, true);
 
         console.log('✅ Event listeners injected successfully!');
@@ -847,55 +952,63 @@ export class WebRecorder {
     }
 
     console.log('🎯 Element picker activated - hover and click to select an element');
+    console.log(`📍 Current page URL: ${this.page.url()}`);
 
     // Inject element picker overlay
-    await this.page.evaluate(() => {
-      // Create overlay to show we're in picking mode
-      const overlay = document.createElement('div');
-      overlay.id = 'qa-element-picker-overlay';
-      overlay.style.cssText = `
-        position: fixed;
-        top: 0;
-        right: 0;
-        background: #ff5722;
-        color: white;
-        padding: 10px 20px;
-        z-index: 999999;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-        font-weight: bold;
-        border-radius: 0 0 0 8px;
-      `;
-      overlay.textContent = '🎯 Click an element to select it (ESC to cancel)';
-      document.body.appendChild(overlay);
+    try {
+      console.log('💉 Injecting element picker overlay...');
+      await this.page.evaluate(() => {
+        // Create overlay to show we're in picking mode
+        const overlay = document.createElement('div');
+        overlay.id = 'qa-element-picker-overlay';
+        overlay.style.cssText = `
+          position: fixed;
+          top: 0;
+          right: 0;
+          background: #ff5722;
+          color: white;
+          padding: 10px 20px;
+          z-index: 999999;
+          font-family: Arial, sans-serif;
+          font-size: 14px;
+          font-weight: bold;
+          border-radius: 0 0 0 8px;
+        `;
+        overlay.textContent = '🎯 Click an element to select it (ESC to cancel)';
+        document.body.appendChild(overlay);
 
-      // Store original outline styles
-      (window as any).qaOriginalOutlines = new Map();
+        // Store original outline styles
+        (window as any).qaOriginalOutlines = new Map();
 
-      // Add hover effect
-      const hoverHandler = (e: MouseEvent) => {
-        e.stopPropagation();
-        // Remove previous highlights
-        document.querySelectorAll('.qa-hover-highlight').forEach(el => {
-          const originalOutline = (window as any).qaOriginalOutlines.get(el);
-          if (originalOutline !== undefined) {
-            (el as HTMLElement).style.outline = originalOutline;
+        // Add hover effect
+        const hoverHandler = (e: MouseEvent) => {
+          e.stopPropagation();
+          // Remove previous highlights
+          document.querySelectorAll('.qa-hover-highlight').forEach(el => {
+            const originalOutline = (window as any).qaOriginalOutlines.get(el);
+            if (originalOutline !== undefined) {
+              (el as HTMLElement).style.outline = originalOutline;
+            }
+            el.classList.remove('qa-hover-highlight');
+          });
+
+          // Highlight current element
+          const target = e.target as HTMLElement;
+          if (target && target.id !== 'qa-element-picker-overlay') {
+            (window as any).qaOriginalOutlines.set(target, target.style.outline);
+            target.style.outline = '3px solid #ff5722';
+            target.classList.add('qa-hover-highlight');
           }
-          el.classList.remove('qa-hover-highlight');
-        });
+        };
 
-        // Highlight current element
-        const target = e.target as HTMLElement;
-        if (target && target.id !== 'qa-element-picker-overlay') {
-          (window as any).qaOriginalOutlines.set(target, target.style.outline);
-          target.style.outline = '3px solid #ff5722';
-          target.classList.add('qa-hover-highlight');
-        }
-      };
-
-      document.addEventListener('mouseover', hoverHandler);
-      (window as any).qaHoverHandler = hoverHandler;
-    });
+        document.addEventListener('mouseover', hoverHandler);
+        (window as any).qaHoverHandler = hoverHandler;
+      });
+      console.log('✅ Overlay injected successfully');
+    } catch (error) {
+      console.error('❌ Failed to inject overlay:', error);
+      return null;
+    }
 
     // Wait for user to click an element or press ESC
     return new Promise(async (resolve) => {
@@ -906,23 +1019,41 @@ export class WebRecorder {
         // Wait for click
         this.page!.evaluate(() => {
           return new Promise<string | null>((resolveClick) => {
+            // Helper to generate full XPath (same as in recording)
+            const getFullXPath = (element: HTMLElement): string => {
+              if (element.id) {
+                return '//' + element.tagName.toLowerCase() + '[@id="' + element.id + '"]';
+              }
+
+              let path = '';
+              for (let el: HTMLElement | null = element; el && el.nodeType == 1; el = el.parentElement) {
+                let index = 0;
+                let hasFollowingSiblings = false;
+                for (let sibling = el.previousSibling; sibling; sibling = sibling.previousSibling) {
+                  if (sibling.nodeType == Node.DOCUMENT_TYPE_NODE) continue;
+                  if (sibling.nodeName == el.nodeName) ++index;
+                }
+                for (let sibling = el.nextSibling; sibling && !hasFollowingSiblings; sibling = sibling.nextSibling) {
+                  if (sibling.nodeName == el.nodeName) hasFollowingSiblings = true;
+                }
+                const tagName = el.nodeName.toLowerCase();
+                const pathIndex = (index || hasFollowingSiblings ? '[' + (index + 1) + ']' : '');
+                path = '/' + tagName + pathIndex + path;
+              }
+              return path;
+            };
+
             const clickListener = (e: MouseEvent) => {
               e.preventDefault();
               e.stopPropagation();
 
               const target = e.target as HTMLElement;
               if (target && target.id !== 'qa-element-picker-overlay') {
-                // Generate CSS selector for the element
-                let selector = target.tagName.toLowerCase();
-                if (target.id) {
-                  selector = `#${target.id}`;
-                } else if (target.className) {
-                  const classes = target.className.split(' ').filter(c => c).join('.');
-                  if (classes) selector = `${target.tagName.toLowerCase()}.${classes}`;
-                }
+                // Generate full XPath for the element
+                const xpath = getFullXPath(target);
 
                 document.removeEventListener('click', clickListener, true);
-                resolveClick(selector);
+                resolveClick(xpath);
               }
             };
 

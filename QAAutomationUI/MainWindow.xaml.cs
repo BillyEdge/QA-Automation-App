@@ -806,10 +806,10 @@ namespace QAAutomationUI
                         // Strip ANSI color codes and trim
                         string cleanData = System.Text.RegularExpressions.Regex.Replace(ev.Data, @"\x1B\[[0-9;]*[a-zA-Z]", "").Trim();
 
+                        // Only consider execution complete when we see the explicit completion signal
+                        // Do NOT use "Report generated" as it can trigger prematurely during suite execution
                         bool isComplete = cleanData.Contains("###EXECUTION_COMPLETE###") ||
-                                         cleanData.Contains("EXECUTION_COMPLETE") ||
-                                         cleanData.Contains("Report generated") ||
-                                         cleanData.Contains("EXIT_CODE");
+                                         cleanData.Contains("EXIT_CODE:");
 
                         if (!completionSignaled && isComplete)
                         {
@@ -853,23 +853,14 @@ namespace QAAutomationUI
                 process.BeginOutputReadLine();
                 process.BeginErrorReadLine();
 
-                // Wait for either completion signal or process exit
-                var processExitTask = process.WaitForExitAsync();
+                // Wait for completion signal (don't exit early on process exit)
                 var completionTask = completionSource.Task;
+                await completionTask;
 
-                var completedTask = await Task.WhenAny(completionTask, processExitTask);
+                AppendOutput("✅ Execution completed via signal\n");
 
-                if (completedTask == completionTask)
-                {
-                    AppendOutput("✅ Execution completed via signal\n");
-                }
-                else
-                {
-                    AppendOutput("✅ Process exited\n");
-                }
-
-                // Give a moment for final output to flush
-                await Task.Delay(500);
+                // Give extra time for report file to be fully written to disk
+                await Task.Delay(1500);
 
                 // Clear completion source to indicate execution is done
                 currentCompletionSource = null;
@@ -2009,6 +2000,69 @@ namespace QAAutomationUI
             }
         }
 
+        private void MenuAddPressKey_Click(object sender, RoutedEventArgs e)
+        {
+            if (dgTestSteps.SelectedItem == null)
+            {
+                MessageBox.Show("Please select a test step first.", "Information", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            // Show dialog to select key
+            var keyDialog = new Window
+            {
+                Title = "Press Key",
+                Width = 400,
+                Height = 220,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this
+            };
+
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(20) };
+            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Select Key to Press:", Margin = new Thickness(0, 0, 0, 10), FontWeight = FontWeights.SemiBold });
+
+            var comboKey = new System.Windows.Controls.ComboBox { Margin = new Thickness(0, 0, 0, 20) };
+            comboKey.Items.Add("Enter");
+            comboKey.Items.Add("Tab");
+            comboKey.Items.Add("Escape");
+            comboKey.Items.Add("ArrowUp");
+            comboKey.Items.Add("ArrowDown");
+            comboKey.Items.Add("ArrowLeft");
+            comboKey.Items.Add("ArrowRight");
+            comboKey.Items.Add("F1");
+            comboKey.Items.Add("F2");
+            comboKey.Items.Add("F3");
+            comboKey.Items.Add("F4");
+            comboKey.Items.Add("F5");
+            comboKey.Items.Add("F12");
+            comboKey.SelectedIndex = 0; // Default to Enter
+            panel.Children.Add(comboKey);
+
+            var btnOk = new System.Windows.Controls.Button
+            {
+                Content = "Add",
+                Width = 100,
+                Height = 30,
+                Background = new SolidColorBrush(Color.FromRgb(59, 130, 246)),
+                Foreground = Brushes.White,
+                FontWeight = FontWeights.SemiBold
+            };
+            btnOk.Click += (s, args) => {
+                keyDialog.DialogResult = true;
+                keyDialog.Close();
+            };
+            panel.Children.Add(btnOk);
+
+            keyDialog.Content = panel;
+
+            if (keyDialog.ShowDialog() == true)
+            {
+                string key = comboKey.SelectedItem?.ToString() ?? "Enter";
+                InsertActionAfterSelected("press_key", $"Press {key} key", key);
+                AppendOutput($"⌨️ Added 'Press Key' action: {key}\n");
+            }
+        }
+
         private void MenuAddWaitFor_Click(object sender, RoutedEventArgs e)
         {
             if (dgTestSteps.SelectedItem == null)
@@ -2054,7 +2108,23 @@ namespace QAAutomationUI
 
                     var process = System.Diagnostics.Process.Start(pickProcess);
                     var output = await process.StandardOutput.ReadToEndAsync();
+                    var errorOutput = await process.StandardError.ReadToEndAsync();
                     await process.WaitForExitAsync();
+
+                    // Log all output for debugging
+                    if (!string.IsNullOrWhiteSpace(output))
+                    {
+                        Console.WriteLine("=== PICK ELEMENT OUTPUT ===");
+                        Console.WriteLine(output);
+                        Console.WriteLine("===========================");
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(errorOutput))
+                    {
+                        Console.WriteLine("=== PICK ELEMENT ERRORS ===");
+                        Console.WriteLine(errorOutput);
+                        Console.WriteLine("===========================");
+                    }
 
                     // Parse the output to get the selector
                     var lines = output.Split('\n');
@@ -2316,31 +2386,40 @@ namespace QAAutomationUI
         {
             try
             {
+                AppendOutput($"📄 Loading report from: {reportPath}\n");
+
                 if (!File.Exists(reportPath))
                 {
-                    AppendOutput("📊 No report file found.\n");
+                    AppendOutput($"❌ Report file not found: {reportPath}\n");
                     return;
                 }
 
                 reportSteps.Clear();
 
                 string jsonContent = File.ReadAllText(reportPath);
+                AppendOutput($"📄 Report file size: {jsonContent.Length} characters\n");
                 using (JsonDocument doc = JsonDocument.Parse(jsonContent))
                 {
                     var root = doc.RootElement;
                     var summary = root.GetProperty("summary");
                     var results = root.GetProperty("results");
 
-                    // Get total steps from results
+                    // Get total steps from results (loop through ALL test cases in suite)
                     int totalSteps = 0;
                     int passedSteps = 0;
                     int failedSteps = 0;
 
-                    if (results.GetArrayLength() > 0)
+                    int testCaseCount = results.GetArrayLength();
+                    AppendOutput($"📊 Loading report with {testCaseCount} test case(s)\n");
+
+                    foreach (var testResult in results.EnumerateArray())
                     {
-                        var testResult = results[0];
+                        string testCaseId = testResult.GetProperty("testCaseId").GetString() ?? "Unknown";
                         var steps = testResult.GetProperty("steps");
-                        totalSteps = steps.GetArrayLength();
+                        int stepCount = steps.GetArrayLength();
+                        totalSteps += stepCount;
+
+                        AppendOutput($"   ✓ {testCaseId}: {stepCount} steps\n");
 
                         foreach (var step in steps.EnumerateArray())
                         {
@@ -2349,6 +2428,8 @@ namespace QAAutomationUI
                             else if (status == "failed") failedSteps++;
                         }
                     }
+
+                    AppendOutput($"📊 Total: {totalSteps} steps, {passedSteps} passed, {failedSteps} failed\n");
 
                     int totalDuration = summary.GetProperty("totalDuration").GetInt32();
 
@@ -2363,43 +2444,12 @@ namespace QAAutomationUI
                     // Draw pie chart
                     DrawPieChart(passedSteps, failedSteps);
 
-                    // Load detailed step results
-                    if (results.GetArrayLength() > 0)
+                    // Load detailed step results from ALL test cases
+                    int stepNum = 1;
+                    foreach (var testResult in results.EnumerateArray())
                     {
-                        var testResult = results[0];
                         var steps = testResult.GetProperty("steps");
 
-                        // Load test case to get action details
-                        Dictionary<string, (string action, string obj)> actionDetails = new Dictionary<string, (string, string)>();
-                        if (!string.IsNullOrEmpty(currentTestFilePath) && File.Exists(currentTestFilePath))
-                        {
-                            string testJson = File.ReadAllText(currentTestFilePath);
-                            using (JsonDocument testDoc = JsonDocument.Parse(testJson))
-                            {
-                                var actions = testDoc.RootElement.GetProperty("actions");
-                                foreach (var action in actions.EnumerateArray())
-                                {
-                                    string id = action.GetProperty("id").GetString() ?? "";
-                                    string type = action.GetProperty("type").GetString() ?? "";
-
-                                    // Get object name
-                                    string objName = "";
-                                    if (action.TryGetProperty("objectId", out var objIdProp))
-                                    {
-                                        string objId = objIdProp.GetString() ?? "";
-                                        var matchingObj = objectRepositoryItems.FirstOrDefault(o => o.Id == objId);
-                                        if (matchingObj != null)
-                                        {
-                                            objName = matchingObj.Name;
-                                        }
-                                    }
-
-                                    actionDetails[id] = (type.ToUpper(), objName);
-                                }
-                            }
-                        }
-
-                        int stepNum = 1;
                         foreach (var step in steps.EnumerateArray())
                         {
                             string actionId = step.GetProperty("actionId").GetString() ?? "";
@@ -2407,19 +2457,15 @@ namespace QAAutomationUI
                             int duration = step.GetProperty("duration").GetInt32();
                             string error = step.TryGetProperty("error", out var err) ? err.GetString() ?? "" : "";
 
-                            string action = "UNKNOWN";
-                            string obj = "";
-                            if (actionDetails.ContainsKey(actionId))
-                            {
-                                action = actionDetails[actionId].action;
-                                obj = actionDetails[actionId].obj;
-                            }
+                            // Get action and object from step directly (suite report includes them)
+                            string action = step.TryGetProperty("action", out var actProp) ? actProp.GetString() ?? "UNKNOWN" : "UNKNOWN";
+                            string obj = step.TryGetProperty("object", out var objProp) ? objProp.GetString() ?? "" : "";
 
                             reportSteps.Add(new ReportStepInfo
                             {
                                 StepNumber = stepNum++,
                                 Status = status.ToLower() == "passed" ? "✓ PASSED" : "✗ FAILED",
-                                Action = action,
+                                Action = action.ToUpper(),
                                 Object = obj,
                                 ExecutionTime = duration.ToString(),
                                 ErrorMessage = error.Length > 100 ? error.Substring(0, 97) + "..." : error
@@ -2447,21 +2493,37 @@ namespace QAAutomationUI
             double centerY = 90;
             double radius = 80;
 
-            double passedAngle = (passed * 360.0) / total;
-            double failedAngle = (failed * 360.0) / total;
-
-            // Draw passed slice (green)
-            if (passed > 0)
+            // If 100% passed, draw a full green circle
+            if (failed == 0)
             {
-                var passedPath = CreatePieSlice(centerX, centerY, radius, 0, passedAngle, Color.FromRgb(16, 185, 129));
-                pieChart.Children.Add(passedPath);
+                var fullCircle = new System.Windows.Shapes.Ellipse
+                {
+                    Width = radius * 2,
+                    Height = radius * 2,
+                    Fill = new SolidColorBrush(Color.FromRgb(16, 185, 129)) // Green
+                };
+                System.Windows.Controls.Canvas.SetLeft(fullCircle, centerX - radius);
+                System.Windows.Controls.Canvas.SetTop(fullCircle, centerY - radius);
+                pieChart.Children.Add(fullCircle);
             }
-
-            // Draw failed slice (red)
-            if (failed > 0)
+            else
             {
-                var failedPath = CreatePieSlice(centerX, centerY, radius, passedAngle, passedAngle + failedAngle, Color.FromRgb(239, 68, 68));
-                pieChart.Children.Add(failedPath);
+                double passedAngle = (passed * 360.0) / total;
+                double failedAngle = (failed * 360.0) / total;
+
+                // Draw passed slice (green)
+                if (passed > 0)
+                {
+                    var passedPath = CreatePieSlice(centerX, centerY, radius, 0, passedAngle, Color.FromRgb(16, 185, 129));
+                    pieChart.Children.Add(passedPath);
+                }
+
+                // Draw failed slice (red)
+                if (failed > 0)
+                {
+                    var failedPath = CreatePieSlice(centerX, centerY, radius, passedAngle, passedAngle + failedAngle, Color.FromRgb(239, 68, 68));
+                    pieChart.Children.Add(failedPath);
+                }
             }
 
             // Add center circle (dark background)
@@ -2653,7 +2715,7 @@ namespace QAAutomationUI
                 {
                     var root = testCaseDoc.RootElement;
 
-                    // Get actions in current UI order
+                    // Get actions in current UI order, WITH UPDATED VALUES FROM UI
                     var actionsArray = new System.Collections.Generic.List<object>();
                     foreach (var step in testSteps)
                     {
@@ -2667,6 +2729,27 @@ namespace QAAutomationUI
                                 {
                                     actionDict[prop.Name] = JsonSerializer.Deserialize<object>(prop.Value.GetRawText());
                                 }
+
+                                // Update with values from UI (if changed)
+                                actionDict["type"] = step.Type.ToLower().Replace(" ", "_");
+                                actionDict["description"] = step.Description;
+
+                                // Update target object path if it exists
+                                if (actionDict.ContainsKey("target") && actionDict["target"] is JsonElement targetElement)
+                                {
+                                    var targetDict = JsonSerializer.Deserialize<System.Collections.Generic.Dictionary<string, object>>(targetElement.GetRawText());
+                                    if (targetDict != null && targetDict.ContainsKey("value"))
+                                    {
+                                        targetDict["value"] = step.ObjectName;
+                                        actionDict["target"] = targetDict;
+                                    }
+                                }
+                                else if (!string.IsNullOrEmpty(step.ObjectName))
+                                {
+                                    // For actions like TYPE, update the value field
+                                    actionDict["value"] = step.ObjectName;
+                                }
+
                                 actionsArray.Add(actionDict);
                                 break;
                             }
@@ -2693,8 +2776,18 @@ namespace QAAutomationUI
             }
             catch (Exception ex)
             {
-                AppendOutput($"❌ Error saving test steps order: {ex.Message}\n");
+                AppendOutput($"❌ Error saving test steps: {ex.Message}\n");
             }
+        }
+
+        private void DgTestSteps_CellEditEnding(object sender, DataGridCellEditEndingEventArgs e)
+        {
+            // Save changes when user finishes editing a cell
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                SaveTestStepsOrder();
+                AppendOutput($"💾 Saved changes to test step\n");
+            }), System.Windows.Threading.DispatcherPriority.Background);
         }
 
         private void SaveTestCasesOrder()

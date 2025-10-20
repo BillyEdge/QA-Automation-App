@@ -128,34 +128,65 @@ program
   .command('pick-element')
   .description('Pick an element from the active browser session')
   .action(async () => {
+    console.log('🎯 Pick element command started');
+
     // This assumes browser is already open from a recording session
     const { browserManager } = await import('./browser/browserManager');
 
     if (!browserManager.isBrowserOpen()) {
-      console.error('❌ No browser session found. Please start a recording first.');
+      console.error('❌ No browser session found.');
+      console.error('💡 Please ensure:');
+      console.error('   1. The browser server is running');
+      console.error('   2. A test has been executed or browser is open');
+      console.error('   3. The browser window is not closed');
       process.exit(1);
     }
 
-    // Create a temporary recorder instance to use the pickElement method
-    const tempRecorder = new WebRecorder({
-      platform: PlatformType.WEB,
-      outputPath: './temp',
-      startUrl: '',
-      testName: 'temp'
-    });
+    console.log('✅ Browser endpoint found, connecting...');
 
-    // Set the page from browser manager
-    const page = await browserManager.getPage();
-    (tempRecorder as any).page = page;
+    try {
+      // Create a temporary recorder instance to use the pickElement method
+      const tempRecorder = new WebRecorder({
+        platform: PlatformType.WEB,
+        outputPath: './temp',
+        startUrl: '',
+        testName: 'temp'
+      });
 
-    const selector = await tempRecorder.pickElement();
+      // Try to get browser and page with better error handling
+      const browser = await browserManager.getBrowser();
+      const context = await browserManager.getContext();
+      const pages = context.pages();
 
-    if (selector) {
-      console.log(`\n✅ Selected element: ${selector}`);
-      // Output just the selector so parent process can capture it
-      console.log(`SELECTED_ELEMENT:${selector}`);
-    } else {
-      console.log('\n❌ Element selection cancelled');
+      if (pages.length === 0) {
+        console.error('❌ No pages found in browser.');
+        console.error('💡 Please navigate to the page you want to pick elements from');
+        process.exit(1);
+      }
+
+      const page = pages[0];
+      console.log(`✅ Got page: ${page.url()}`);
+      (tempRecorder as any).page = page;
+
+      console.log('🎯 Calling pickElement...');
+      const selector = await tempRecorder.pickElement();
+      console.log(`🎯 pickElement returned: ${selector}`);
+
+      if (selector) {
+        console.log(`\n✅ Selected element: ${selector}`);
+        // Output just the selector so parent process can capture it
+        console.log(`SELECTED_ELEMENT:${selector}`);
+      } else {
+        console.log('\n❌ Element selection cancelled');
+      }
+
+      console.log('🎯 Pick element command finished');
+      process.exit(0);
+    } catch (error: any) {
+      console.error('❌ Error in pickElement:', error.message);
+      console.error('💡 Make sure the browser window is open and not minimized');
+      console.error('Stack:', error.stack);
+      process.exit(1);
     }
   });
 
@@ -185,6 +216,19 @@ program
   .option('-l, --loop <count>', 'Number of times to loop the test', '1')
   .action(async (testfile, options) => {
     const executor = new TestExecutor();
+    let keepAliveTimer: NodeJS.Timeout | null = null;
+
+    // Setup signal handlers for graceful termination
+    const cleanup = () => {
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+      }
+      console.log('✅ Execution completed via signal');
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', cleanup);
+    process.on('SIGINT', cleanup);
 
     try {
       const loopCount = parseInt(options.loop);
@@ -201,7 +245,7 @@ program
       // Keep process alive to preserve browser session
       console.log('🌐 Keeping process alive to preserve browser session...');
       // Prevent Node.js from exiting by keeping event loop active
-      setInterval(() => {}, 60000); // Keep-alive timer every 60 seconds
+      keepAliveTimer = setInterval(() => {}, 60000); // Keep-alive timer every 60 seconds
 
     } catch (error: any) {
       console.error('❌ Execution failed:', error.message);
@@ -210,7 +254,7 @@ program
 
       // Keep process alive even on error
       console.log('🌐 Keeping process alive to preserve browser session...');
-      setInterval(() => {}, 60000);
+      keepAliveTimer = setInterval(() => {}, 60000);
     }
   });
 
@@ -315,14 +359,40 @@ program
     const manager = new TestSuiteManager();
     const reportPath = options.report || `./reports/suite-${suiteId}-report.json`;
     const loopCount = parseInt(options.loop);
+    let keepAliveTimer: NodeJS.Timeout | null = null;
+
+    // Setup signal handlers for graceful termination
+    const cleanup = () => {
+      if (keepAliveTimer) {
+        clearInterval(keepAliveTimer);
+      }
+      console.log('✅ Execution completed via signal');
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', cleanup);
+    process.on('SIGINT', cleanup);
 
     try {
       const results = await manager.executeSuite(suiteId, reportPath, loopCount);
       const failed = results.filter(r => r.status === 'failed').length;
-      process.exit(failed > 0 ? 1 : 0);
+
+      // Signal completion without exiting (to keep browser alive)
+      console.log('###EXECUTION_COMPLETE###');
+      console.log(`EXIT_CODE:${failed > 0 ? 1 : 0}`);
+
+      // Keep process alive to preserve browser session
+      console.log('🌐 Keeping process alive to preserve browser session...');
+      keepAliveTimer = setInterval(() => {}, 60000); // Keep-alive timer every 60 seconds
+
     } catch (error: any) {
       console.error('❌ Failed to execute suite:', error.message);
-      process.exit(1);
+      console.log('###EXECUTION_COMPLETE###');
+      console.log('EXIT_CODE:1');
+
+      // Keep process alive even on error
+      console.log('🌐 Keeping process alive to preserve browser session...');
+      keepAliveTimer = setInterval(() => {}, 60000);
     }
   });
 

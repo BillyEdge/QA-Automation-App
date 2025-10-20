@@ -156,6 +156,18 @@ export class TestExecutor {
       throw new Error('Web browser not initialized');
     }
 
+    // Remove recording overlay if it exists (executor should not show recording UI)
+    try {
+      await page.evaluate(() => {
+        const overlay = document.getElementById('qa-recorder-overlay');
+        if (overlay) {
+          overlay.remove();
+        }
+      });
+    } catch (e) {
+      // Ignore errors (overlay might not exist)
+    }
+
     switch (action.type) {
       case ActionType.NAVIGATE:
         // Skip navigation if value is empty (tab switch marker)
@@ -170,20 +182,227 @@ export class TestExecutor {
         } else {
           console.log(`   🔄 Navigating to ${action.value}`);
           await page.goto(action.value);
+
+          // Wait for network to be idle (all API calls to complete)
+          console.log(`   ⏳ Waiting for page to fully load (network idle)...`);
+          try {
+            await page.waitForLoadState('networkidle', { timeout: 15000 });
+            console.log(`   ✅ Network idle - all API calls completed`);
+          } catch (e) {
+            console.log(`   ⚠️ Network still active after 15s, continuing...`);
+          }
+
+          // Additional wait to ensure React components, state management, and UI are fully initialized
+          // This is especially important on first load when JavaScript needs to initialize
+          console.log(`   ⏳ Waiting for React app to fully initialize...`);
+          await page.waitForTimeout(3000);
+
+          // Reload the page to ensure all cached state is properly loaded
+          // This fixes an issue where first load shows a simplified UI version
+          console.log(`   🔄 Reloading page to ensure full initialization...`);
+          await page.reload({ waitUntil: 'networkidle' });
+          console.log(`   ⏳ Waiting for React state to stabilize...`);
+          await page.waitForTimeout(5000);
+
+          console.log(`   ✅ Page ready for interaction`);
         }
         break;
 
       case ActionType.CLICK:
         if (action.target) {
-          const locator = this.getLocator(page, action.target);
-          await locator.click();
+          // Detect if this element is in a modal/dialog (common patterns: div[3], div[2] in body)
+          const isInModal = action.target.value.includes('/body/div[3]') ||
+                           action.target.value.includes('/body/div[2]') ||
+                           action.target.value.includes('modal') ||
+                           action.target.value.includes('dialog');
+
+          if (isInModal) {
+            console.log(`   🪟 Element in modal detected - waiting for modal to load`);
+
+            // Wait for page navigation/redirect to complete (shorter timeout)
+            try {
+              await page.waitForLoadState('domcontentloaded', { timeout: 5000 });
+              console.log(`   ✅ Page loaded`);
+            } catch (e) {
+              console.log(`   ℹ️ Still loading, continuing...`);
+            }
+
+            // Shorter wait for modal animations (2s instead of 5s)
+            await page.waitForTimeout(2000);
+          }
+
+          let clicked = false;
+          let lastError: any = null;
+
+          // Special handling for btn_new_doc (Add New button in modal)
+          // This button needs extra time for React to attach event handlers
+          if (action.target.value.includes('btn_new_doc') || action.description?.includes('btn_new_doc')) {
+            console.log(`   🔘 Modal action button detected - ensuring event handlers are ready...`);
+            await page.waitForTimeout(3000);
+            console.log(`   ✅ Event handlers should be attached`);
+          }
+
+          // Check for sidebar backdrop and dismiss it before clicking
+          try {
+            const sidebarBackdrop = page.locator('div.sidebar-backdrop');
+            const backdropCount = await sidebarBackdrop.count();
+            if (backdropCount > 0 && await sidebarBackdrop.first().isVisible()) {
+              console.log(`   🚫 Sidebar backdrop detected - dismissing...`);
+              // Click the backdrop to dismiss the sidebar
+              await sidebarBackdrop.first().click({ force: true, timeout: 2000 });
+              // Wait for backdrop to disappear
+              await page.waitForTimeout(500);
+              console.log(`   ✅ Sidebar dismissed`);
+            }
+          } catch (backdropError: any) {
+            // Ignore backdrop errors - it might not exist
+            console.log(`   ℹ️ No sidebar backdrop found (this is fine)`);
+          }
+
+          // Try XPath first
+          try {
+            const locator = this.getLocator(page, action.target);
+            await locator.waitFor({ state: 'visible', timeout: 8000 });
+            await locator.click({ timeout: 5000 });
+            clicked = true;
+          } catch (xpathError: any) {
+            lastError = xpathError;
+            console.log(`   ⚠️ XPath locator failed: ${xpathError.message}`);
+
+            // Try CSS fallback if available
+            if (action.target.fallbacks && action.target.fallbacks.length > 0) {
+              for (const fallback of action.target.fallbacks) {
+                if (fallback.type === 'css') {
+                  try {
+                    console.log(`   🔄 Trying CSS fallback: ${fallback.value}`);
+                    let cssLocator = page.locator(fallback.value);
+
+                    // If multiple matches, try to use XPath context to find the right one
+                    const count = await cssLocator.count();
+                    if (count > 1) {
+                      console.log(`   ℹ️ Found ${count} elements, using context from XPath`);
+
+                      // Extract table row index from XPath if it exists (e.g., tr[1], tr[2])
+                      const rowMatch = action.target.value.match(/\/tr\[(\d+)\]/);
+                      if (rowMatch) {
+                        const rowIndex = parseInt(rowMatch[1]) - 1; // Convert to 0-based index
+                        console.log(`   🎯 Targeting row ${rowIndex + 1} based on XPath`);
+
+                        // Try to find input in the specific table row
+                        cssLocator = page.locator(`tbody tr:nth-child(${rowIndex + 1}) ${fallback.value}`);
+                      } else {
+                        // No row context, just use first match
+                        console.log(`   🎯 Using first match`);
+                        cssLocator = cssLocator.first();
+                      }
+                    }
+
+                    await cssLocator.waitFor({ state: 'visible', timeout: 8000 });
+                    await cssLocator.click({ timeout: 5000 });
+                    clicked = true;
+                    console.log(`   ✅ CSS fallback succeeded`);
+                    break;
+                  } catch (cssError: any) {
+                    lastError = cssError;
+                    console.log(`   ⚠️ CSS fallback failed: ${cssError.message}`);
+                  }
+                }
+              }
+            }
+
+            // Try text-based selector if description has quoted text (e.g., 'Click on div "Edge Cafe"')
+            if (!clicked && action.description) {
+              const textMatch = action.description.match(/[""]([^"""]+)[""]/) || action.description.match(/"([^"]+)"/);
+              if (textMatch && textMatch[1]) {
+                const textContent = textMatch[1];
+                // Skip if it's a CSS selector (starts with . or #) or contains "btn" or "css-"
+                if (!textContent.startsWith('.') && !textContent.startsWith('#') &&
+                    !textContent.includes('btn') && !textContent.includes('css-')) {
+                  try {
+                    console.log(`   🔄 Trying text-based selector: "${textContent}"`);
+
+                    // Try to find dropdown option specifically (to avoid matching table cells, etc.)
+                    // Look for react-select options or role="option"
+                    let textLocator = page.locator('[id*="react-select"][id*="option"]').filter({ hasText: textContent });
+
+                    // If no react-select option found, try generic role="option"
+                    if (await textLocator.count() === 0) {
+                      textLocator = page.locator('[role="option"]').filter({ hasText: textContent });
+                    }
+
+                    // If still not found, fall back to generic text search
+                    if (await textLocator.count() === 0) {
+                      textLocator = page.getByText(textContent, { exact: true }).first();
+                    }
+
+                    await textLocator.waitFor({ state: 'visible', timeout: 8000 });
+                    await textLocator.click({ timeout: 5000 });
+                    clicked = true;
+                    console.log(`   ✅ Text-based selector succeeded`);
+                  } catch (textError: any) {
+                    lastError = textError;
+                    console.log(`   ⚠️ Text-based selector failed: ${textError.message}`);
+                  }
+                }
+              }
+            }
+          }
+
+          // If still not clicked, try force click as last resort
+          if (!clicked) {
+            const locator = this.getLocator(page, action.target);
+            try {
+              if (lastError.message.includes('intercepts pointer events')) {
+                console.log(`   ⚠️ Element covered by overlay, using force click...`);
+                await locator.click({ force: true });
+              } else {
+                console.log(`   ⚠️ Element not immediately available, waiting and force clicking...`);
+                await page.waitForTimeout(3000);
+                await locator.click({ force: true, timeout: 5000 });
+              }
+            } catch (finalError: any) {
+              // Try CSS fallback with force click as absolute last resort
+              if (action.target.fallbacks && action.target.fallbacks.length > 0) {
+                for (const fallback of action.target.fallbacks) {
+                  if (fallback.type === 'css') {
+                    console.log(`   🔄 Final attempt with CSS fallback + force click`);
+                    const cssLocator = page.locator(fallback.value);
+                    await page.waitForTimeout(2000);
+                    await cssLocator.click({ force: true, timeout: 5000 });
+                    return;
+                  }
+                }
+              }
+              throw finalError;
+            }
+          }
         }
         break;
 
       case ActionType.TYPE:
         if (action.target) {
-          const locator = this.getLocator(page, action.target);
-          await locator.fill(action.value);
+          try {
+            const locator = this.getLocator(page, action.target);
+            await locator.fill(action.value);
+          } catch (xpathError: any) {
+            console.log(`   ⚠️ XPath locator failed: ${xpathError.message}`);
+
+            // Try CSS fallback if available
+            if (action.target.fallbacks && action.target.fallbacks.length > 0) {
+              for (const fallback of action.target.fallbacks) {
+                if (fallback.type === 'css') {
+                  console.log(`   🔄 Trying CSS fallback: ${fallback.value}`);
+                  const cssLocator = page.locator(fallback.value);
+                  await cssLocator.fill(action.value);
+                  console.log(`   ✅ CSS fallback succeeded`);
+                  return;
+                }
+              }
+            }
+
+            // Re-throw if no fallback worked
+            throw xpathError;
+          }
         }
         break;
 
@@ -194,7 +413,12 @@ export class TestExecutor {
       case ActionType.WAIT_FOR_ELEMENT:
         if (action.value) {
           console.log(`   ⏳ Waiting for element: ${action.value}`);
-          await page.waitForSelector(action.value, {
+          // Check if it's an XPath (starts with / or //)
+          const isXPath = action.value.startsWith('/') || action.value.startsWith('//');
+          const selector = isXPath ? `xpath=${action.value}` : action.value;
+          console.log(`   🎯 Using ${isXPath ? 'XPath' : 'CSS'} locator: ${action.value}`);
+          const locator = page.locator(selector);
+          await locator.waitFor({
             state: 'visible',
             timeout: 30000  // 30 second timeout
           });
@@ -227,6 +451,16 @@ export class TestExecutor {
           const locator = this.getLocator(page, action.target);
           await locator.selectOption(action.value);
         }
+        break;
+
+      case ActionType.PRESS_KEY:
+        if (action.target) {
+          // Focus on the target element first
+          const locator = this.getLocator(page, action.target);
+          await locator.focus();
+        }
+        // Press the key (e.g., 'Enter', 'Tab', 'Escape')
+        await page.keyboard.press(action.value);
         break;
 
       default:
@@ -357,6 +591,11 @@ export class TestExecutor {
     const testCaseJson = fs.readFileSync(testCaseFilePath, 'utf-8');
     const testCase: TestCase = JSON.parse(testCaseJson);
 
+    // For web tests, ensure browser is on the correct URL before executing
+    if (testCase.platform === PlatformType.WEB) {
+      await this.ensureBrowserReady(testCaseFilePath);
+    }
+
     if (loopCount > 1) {
       console.log(`\n🔁 Looping test case ${loopCount} times`);
     }
@@ -380,6 +619,67 @@ export class TestExecutor {
     }
 
     return lastResult!;
+  }
+
+  private async ensureBrowserReady(testFilePath: string): Promise<void> {
+    console.log('🔍 Checking browser state...');
+
+    // Read suite config to get URL
+    const testsDir = path.dirname(testFilePath);
+    const suiteDir = path.dirname(testsDir);
+    const suiteConfigPath = path.join(suiteDir, 'suite-config.json');
+
+    if (!fs.existsSync(suiteConfigPath)) {
+      console.log('⚠️ Suite config not found - cannot determine URL');
+      return;
+    }
+
+    const suiteConfig = JSON.parse(fs.readFileSync(suiteConfigPath, 'utf-8'));
+    const suiteUrl = suiteConfig.url || suiteConfig.path || suiteConfig.urlOrPath;
+
+    if (!suiteUrl) {
+      console.log('⚠️ No URL found in suite config');
+      console.log(`   Checked fields: url, path, urlOrPath`);
+      console.log(`   Config contents: ${JSON.stringify(suiteConfig, null, 2)}`);
+      return;
+    }
+
+    console.log(`✅ Found suite URL: ${suiteUrl}`);
+
+    // Get browser and check if it has pages
+    const browser = await browserManager.getBrowser();
+    const context = await browserManager.getContext();
+    const pages = context.pages();
+
+    if (pages.length === 0) {
+      console.log(`📄 No pages found - creating new page and navigating to ${suiteUrl}`);
+      const page = await context.newPage();
+      await page.goto(suiteUrl, { waitUntil: 'networkidle' });
+      console.log(`✅ Browser ready at ${suiteUrl}`);
+    } else {
+      const currentUrl = pages[0].url();
+      console.log(`✅ Browser already has page open: ${currentUrl}`);
+
+      // Extract domain from suite URL
+      const suiteDomain = new URL(suiteUrl).origin; // e.g., "https://t1.equipweb.biz"
+
+      // Navigate if:
+      // 1. Page is blank (about:blank)
+      // 2. Page is on a different domain than the suite
+      const needsNavigation =
+        currentUrl === 'about:blank' ||
+        !currentUrl.startsWith('http') ||
+        !currentUrl.startsWith(suiteDomain);
+
+      if (needsNavigation) {
+        console.log(`📍 Navigating to ${suiteUrl} (current: ${currentUrl})`);
+        await pages[0].goto(suiteUrl, { waitUntil: 'networkidle' });
+        console.log(`✅ Navigated to ${suiteUrl}`);
+      } else {
+        console.log(`💡 Staying on current page (same domain): ${currentUrl}`);
+        console.log(`   Suite domain: ${suiteDomain}`);
+      }
+    }
   }
 
   async executeBatch(testCaseFilePaths: string[]): Promise<ExecutionResult[]> {

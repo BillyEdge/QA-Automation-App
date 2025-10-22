@@ -62,13 +62,34 @@ export class WebRecorder {
 
     // If continuing existing test, load existing actions
     if (this.config.continueExisting) {
-      const testFilePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
       console.log(`🔄 CONTINUE MODE ENABLED`);
+
+      // First, try to find the test file by name (case-insensitive, handles spaces/hyphens)
+      let testFilePath = path.join(this.config.outputPath, `${this.testCaseId}.json`);
+
+      // If the constructed path doesn't exist, search for a matching file in the directory
+      if (!fs.existsSync(testFilePath)) {
+        const testFiles = fs.readdirSync(this.config.outputPath).filter(f => f.endsWith('.json'));
+        const matchingFile = testFiles.find(f => {
+          // Normalize filenames for comparison (remove .json, replace hyphens/spaces)
+          const normalizedFile = f.replace('.json', '').toLowerCase().replace(/[-\s]/g, '');
+          const normalizedTestName = this.testCaseId.toLowerCase().replace(/[-\s]/g, '');
+          return normalizedFile === normalizedTestName;
+        });
+
+        if (matchingFile) {
+          testFilePath = path.join(this.config.outputPath, matchingFile);
+          console.log(`📂 Found matching test file: ${matchingFile}`);
+        }
+      }
+
       console.log(`📂 Looking for existing test at: ${testFilePath}`);
       if (fs.existsSync(testFilePath)) {
         console.log(`✅ Found existing test file!`);
         const existingTest = JSON.parse(fs.readFileSync(testFilePath, 'utf-8'));
         this.actions = existingTest.actions || [];
+        // Update testCaseId to match the found file
+        this.testCaseId = testFilePath.split('/').pop()?.replace('.json', '') || this.testCaseId;
         console.log(`✅ Loaded ${this.actions.length} existing actions - new actions will be appended`);
       } else {
         console.log(`⚠️ Continue flag set but no existing test found at ${testFilePath} - starting fresh`);
@@ -325,15 +346,16 @@ export class WebRecorder {
     await this.page.exposeFunction('recordKeyPress', async (objectData: any, key: string) => {
       console.log(`⌨️ Key press recorded: ${key} on ${objectData.selector}`);
 
-      // Store object in repository
-      const objectId = this.storeObject(objectData);
+      // Note: For press_key, we don't need to store the object or create a target
+      // The key will be pressed globally (on whatever element currently has focus)
+      // Only store object if specifically needed for reference, but don't create a target
 
       await this.addAction({
         type: ActionType.PRESS_KEY,
-        target: await this.createLocator(objectData.selector, objectData.xpath),
         value: key,
-        description: `Press ${key} key on ${objectData.placeholder || objectData.name || objectData.selector}`,
-        objectId: objectId
+        description: `Press ${key} key`,
+        // Optional: you could add target if you want to focus on an element first
+        // target: await this.createLocator(objectData.selector, objectData.xpath),
       });
     });
 
@@ -437,16 +459,17 @@ export class WebRecorder {
         });
 
         await newPage.exposeFunction('recordKeyPress', async (objectData: any, key: string) => {
-          console.log(`⌨️ Key press recorded in tab #${pageIndex}: ${key} on ${objectData.selector}`);
+          console.log(`⌨️ Key press recorded in tab #${pageIndex}: ${key}`);
 
-          const objectId = this.storeObject(objectData);
+          // Note: For press_key, we don't need to store the object or create a target
+          // The key will be pressed globally (on whatever element currently has focus)
 
           await this.addAction({
             type: ActionType.PRESS_KEY,
-            target: await this.createLocator(objectData.selector, objectData.xpath),
             value: key,
-            description: `Press ${key} key on ${objectData.placeholder || objectData.name || objectData.selector}`,
-            objectId: objectId
+            description: `Press ${key} key`,
+            // Optional: you could add target if you want to focus on an element first
+            // target: await this.createLocator(objectData.selector, objectData.xpath),
           });
         });
 
@@ -665,12 +688,61 @@ export class WebRecorder {
             };
           };
 
+          // Helper function to find the actual interactive element
+          var findInteractiveElement = function(el) {
+            // If current element is interactive tag, use it immediately
+            var tag = el.tagName.toLowerCase();
+            if (tag === 'button' || tag === 'a' || tag === 'input' || tag === 'select' || tag === 'textarea') {
+              return el;
+            }
+
+            // Check for interactive attributes on current element
+            if (el.getAttribute('role') === 'button' || el.hasAttribute('onclick') || el.hasAttribute('data-testid')) {
+              return el;
+            }
+
+            // Walk up the DOM tree to find the closest interactive parent
+            var parent = el.parentElement;
+            var depth = 0;
+
+            while (parent && parent.tagName.toLowerCase() !== 'body' && depth < 10) {
+              var parentTag = parent.tagName.toLowerCase();
+
+              // Prefer actual interactive tags
+              if (parentTag === 'button' || parentTag === 'a' || parentTag === 'input' || parentTag === 'select' || parentTag === 'textarea') {
+                return parent;
+              }
+
+              // Check for interactive attributes
+              if (parent.getAttribute('role') === 'button' || parent.hasAttribute('onclick') || parent.hasAttribute('data-testid')) {
+                return parent;
+              }
+
+              // For divs, check if it looks like a button (has btn-related classes)
+              if (parentTag === 'div') {
+                var className = parent.getAttribute('class') || '';
+                // If div has button-like classes, return it
+                if (className.indexOf('btn') !== -1 || className.indexOf('button') !== -1) {
+                  return parent;
+                }
+              }
+
+              parent = parent.parentElement;
+              depth++;
+            }
+
+            // If no interactive parent found after depth limit, return original element
+            return el;
+          };
+
           // Click event listener
           document.addEventListener('click', function(e) {
             var target = e.target;
             if (target.id === 'qa-recorder-overlay' || target.closest('#qa-recorder-overlay')) return;
 
-            var objectData = window.captureObjectData(target);
+            // Find the actual interactive element (not nested children)
+            var interactiveElement = findInteractiveElement(target);
+            var objectData = window.captureObjectData(interactiveElement);
 
             console.log('📌 Click detected on: ' + objectData.tagName + ' - ' + objectData.text);
             console.log('   📦 Object - ID: ' + objectData.id + ', Name: ' + objectData.name + ', Class: ' + objectData.className);

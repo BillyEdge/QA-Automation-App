@@ -587,41 +587,67 @@ export class WebRecorder {
             // ALWAYS use full XPath for maximum reliability
             xpath = fullXPath;
 
-            // Generate CSS selector for fallback
-            // Try ID first (most stable)
-            if (element.id) {
+            // Generate CSS selector for fallback (React-aware)
+            // Priority order: id > data-testid > aria-label > name > placeholder > text > stable classes > tag
+
+            var tagName = element.tagName.toLowerCase();
+
+            // Helper function to detect generated IDs and classes
+            var isGeneratedId = function(id) {
+              return /^(__react|__id|_)/i.test(id);
+            };
+
+            var isGeneratedAttribute = function(value) {
+              return /^(styles__|css-|_|__)/i.test(value);
+            };
+
+            var isGeneratedClass = function(cls) {
+              return /^(css-|styles__|_|__)/i.test(cls) || /^(mc-|ant-|ui-|component-)/i.test(cls);
+            };
+
+            var extractStableClasses = function(className) {
+              if (!className) return [];
+              return className.split(' ')
+                .filter(function(c) { return c && !isGeneratedClass(c); })
+                .slice(0, 2);
+            };
+
+            // Priority 1: ID (if not generated)
+            if (element.id && !isGeneratedId(element.id)) {
               selector = '#' + element.id;
             }
-            // Try name attribute
-            else if (element.getAttribute('name')) {
-              selector = '[name="' + element.getAttribute('name') + '"]';
-            }
-            // Try placeholder
-            else if (element.getAttribute('placeholder')) {
-              selector = '[placeholder="' + element.getAttribute('placeholder') + '"]';
-            }
-            // Try aria-label
-            else if (element.getAttribute('aria-label')) {
-              selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
-            }
-            // Try data-testid or data-test
+            // Priority 2: data-testid
             else if (element.getAttribute('data-testid')) {
               selector = '[data-testid="' + element.getAttribute('data-testid') + '"]';
             }
-            else if (element.getAttribute('data-test')) {
-              selector = '[data-test="' + element.getAttribute('data-test') + '"]';
+            // Priority 3: aria-label
+            else if (element.getAttribute('aria-label')) {
+              selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
             }
-            // Try class
+            // Priority 4: name attribute
+            else if (element.getAttribute('name') && !isGeneratedAttribute(element.getAttribute('name'))) {
+              selector = tagName + '[name="' + element.getAttribute('name') + '"]';
+            }
+            // Priority 5: placeholder
+            else if (element.getAttribute('placeholder')) {
+              selector = tagName + '[placeholder="' + element.getAttribute('placeholder') + '"]';
+            }
+            // Priority 6: type attribute for inputs
+            else if (element.getAttribute('type') && tagName === 'input') {
+              selector = tagName + '[type="' + element.getAttribute('type') + '"]';
+            }
+            // Priority 7: stable classes
             else if (element.className && typeof element.className === 'string') {
-              var classes = element.className.split(' ').filter(function(c) { return c && !c.startsWith('_'); }).slice(0, 2).join('.');
-              if (classes) {
-                selector = element.tagName.toLowerCase() + '.' + classes;
+              var stableClasses = extractStableClasses(element.className);
+              if (stableClasses.length > 0) {
+                selector = tagName + '.' + stableClasses.join('.');
               } else {
-                selector = element.tagName.toLowerCase();
+                selector = tagName;
               }
             }
+            // Priority 8: fallback to tag name
             else {
-              selector = element.tagName.toLowerCase();
+              selector = tagName;
             }
 
             return {
@@ -775,21 +801,89 @@ export class WebRecorder {
   }
 
   private generateXPath(objectData: any): string {
-    // Simple XPath generation
-    let xpath = `//${objectData.tagName}`;
+    // React-aware XPath generation with priority order
+    // Goal: Generate ONE optimal selector (fastest, most stable)
 
-    if (objectData.id) {
-      xpath = `//${objectData.tagName}[@id='${objectData.id}']`;
-    } else if (objectData.name) {
-      xpath = `//${objectData.tagName}[@name='${objectData.name}']`;
-    } else if (objectData.attributes?.placeholder) {
-      xpath = `//${objectData.tagName}[@placeholder='${objectData.attributes.placeholder}']`;
-    } else if (objectData.className) {
-      const firstClass = objectData.className.split(' ')[0];
-      xpath = `//${objectData.tagName}[contains(@class,'${firstClass}')]`;
+    // Priority 1: ID attribute (fastest, most stable)
+    if (objectData.id && !this.isGeneratedId(objectData.id)) {
+      return `//${objectData.tagName}[@id='${objectData.id}']`;
     }
 
-    return xpath;
+    // Priority 2: data-testid (intentional for testing, very stable)
+    if (objectData.attributes?.['data-testid']) {
+      return `//${objectData.tagName}[@data-testid='${objectData.attributes['data-testid']}']`;
+    }
+
+    // Priority 3: aria-label (accessible elements, stable)
+    if (objectData.attributes?.['aria-label']) {
+      return `//${objectData.tagName}[@aria-label='${objectData.attributes['aria-label']}']`;
+    }
+
+    // Priority 4: name attribute (form inputs, very stable)
+    if (objectData.name && !this.isGeneratedAttribute(objectData.name)) {
+      return `//${objectData.tagName}[@name='${objectData.name}']`;
+    }
+
+    // Priority 5: placeholder (form inputs, stable)
+    if (objectData.attributes?.placeholder) {
+      return `//${objectData.tagName}[@placeholder='${objectData.attributes.placeholder}']`;
+    }
+
+    // Priority 6: Text content for buttons, links, labels (stable)
+    if (objectData.text && (objectData.tagName === 'button' || objectData.tagName === 'a' || objectData.tagName === 'label')) {
+      const textContent = objectData.text.substring(0, 100); // Use up to 100 chars
+      return `//${objectData.tagName}[contains(text(), '${this.escapeXPathString(textContent)}')]`;
+    }
+
+    // Priority 7: Stable classes (filter out React-generated ones)
+    if (objectData.className) {
+      const stableClasses = this.extractStableClasses(objectData.className);
+      if (stableClasses.length > 0) {
+        // Use combination of stable classes for better specificity
+        let classCondition = stableClasses.map(c => `contains(@class, '${c}')`).join(' and ');
+        return `//${objectData.tagName}[${classCondition}]`;
+      }
+    }
+
+    // Priority 8: type attribute for inputs (stable)
+    if (objectData.attributes?.type && objectData.tagName === 'input') {
+      return `//${objectData.tagName}[@type='${objectData.attributes.type}']`;
+    }
+
+    // Priority 9: Fallback to tag name only
+    return `//${objectData.tagName}`;
+  }
+
+  private isGeneratedId(id: string): boolean {
+    // Detect React-generated IDs (e.g., __react_auto_xxx, etc.)
+    return /^(__react|__id|_)/i.test(id);
+  }
+
+  private isGeneratedAttribute(value: string): boolean {
+    // Detect generated attribute values
+    return /^(styles__|css-|_|__)/i.test(value);
+  }
+
+  private extractStableClasses(className: string): string[] {
+    if (!className) return [];
+
+    // Filter out React-generated classes
+    return className
+      .split(' ')
+      .filter(cls => {
+        if (!cls) return false;
+        // Skip generated classes: css-xxxx, styles__xxx, _xxx, etc.
+        if (/^(css-|styles__|_|__)/i.test(cls)) return false;
+        // Skip vendor prefixes and utility classes that might be generated
+        if (/^(mc-|ant-|ui-|component-)/i.test(cls)) return false;
+        return true;
+      })
+      .slice(0, 2); // Use max 2 stable classes
+  }
+
+  private escapeXPathString(str: string): string {
+    // Escape single quotes in XPath strings
+    return str.replace(/'/g, "&apos;");
   }
 
   private async createLocator(selector: string, xpath?: string): Promise<ElementLocator> {

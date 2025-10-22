@@ -183,27 +183,17 @@ export class TestExecutor {
           console.log(`   🔄 Navigating to ${action.value}`);
           await page.goto(action.value);
 
-          // Wait for network to be idle (all API calls to complete)
-          console.log(`   ⏳ Waiting for page to fully load (network idle)...`);
+          // Wait for page to load - use domcontentloaded for faster execution
+          console.log(`   ⏳ Waiting for page to load...`);
           try {
-            await page.waitForLoadState('networkidle', { timeout: 15000 });
-            console.log(`   ✅ Network idle - all API calls completed`);
+            await page.waitForLoadState('domcontentloaded', { timeout: 5000 });
+            console.log(`   ✅ Page loaded`);
           } catch (e) {
-            console.log(`   ⚠️ Network still active after 15s, continuing...`);
+            console.log(`   ⚠️ Page load timeout, continuing...`);
           }
 
-          // Additional wait to ensure React components, state management, and UI are fully initialized
-          // This is especially important on first load when JavaScript needs to initialize
-          console.log(`   ⏳ Waiting for React app to fully initialize...`);
-          await page.waitForTimeout(3000);
-
-          // Reload the page to ensure all cached state is properly loaded
-          // This fixes an issue where first load shows a simplified UI version
-          console.log(`   🔄 Reloading page to ensure full initialization...`);
-          await page.reload({ waitUntil: 'networkidle' });
-          console.log(`   ⏳ Waiting for React state to stabilize...`);
-          await page.waitForTimeout(5000);
-
+          // Brief wait for React to initialize (reduced from 8s total to 2s)
+          await page.waitForTimeout(2000);
           console.log(`   ✅ Page ready for interaction`);
         }
         break;
@@ -217,30 +207,22 @@ export class TestExecutor {
                            action.target.value.includes('dialog');
 
           if (isInModal) {
-            console.log(`   🪟 Element in modal detected - waiting for modal to load`);
+            console.log(`   🪟 Element in modal detected`);
 
-            // Wait for page navigation/redirect to complete (shorter timeout)
+            // Wait for page navigation/redirect to complete (if any)
             try {
-              await page.waitForLoadState('domcontentloaded', { timeout: 5000 });
+              await page.waitForLoadState('domcontentloaded', { timeout: 3000 });
               console.log(`   ✅ Page loaded`);
             } catch (e) {
               console.log(`   ℹ️ Still loading, continuing...`);
             }
-
-            // Shorter wait for modal animations (2s instead of 5s)
-            await page.waitForTimeout(2000);
+            // Note: Modal animations should be handled by explicit WAIT steps in test
           }
 
           let clicked = false;
           let lastError: any = null;
 
-          // Special handling for btn_new_doc (Add New button in modal)
-          // This button needs extra time for React to attach event handlers
-          if (action.target.value.includes('btn_new_doc') || action.description?.includes('btn_new_doc')) {
-            console.log(`   🔘 Modal action button detected - ensuring event handlers are ready...`);
-            await page.waitForTimeout(3000);
-            console.log(`   ✅ Event handlers should be attached`);
-          }
+          // No hardcoded waits - all waits should be explicit WAIT steps in the test
 
           // Check for sidebar backdrop and dismiss it before clicking
           try {
@@ -262,8 +244,8 @@ export class TestExecutor {
           // Try XPath first
           try {
             const locator = this.getLocator(page, action.target);
-            await locator.waitFor({ state: 'visible', timeout: 8000 });
-            await locator.click({ timeout: 5000 });
+            await locator.waitFor({ state: 'visible', timeout: 5000 });
+            await locator.click({ timeout: 3000 });
             clicked = true;
           } catch (xpathError: any) {
             lastError = xpathError;
@@ -297,8 +279,8 @@ export class TestExecutor {
                       }
                     }
 
-                    await cssLocator.waitFor({ state: 'visible', timeout: 8000 });
-                    await cssLocator.click({ timeout: 5000 });
+                    await cssLocator.waitFor({ state: 'visible', timeout: 5000 });
+                    await cssLocator.click({ timeout: 3000 });
                     clicked = true;
                     console.log(`   ✅ CSS fallback succeeded`);
                     break;
@@ -335,8 +317,8 @@ export class TestExecutor {
                       textLocator = page.getByText(textContent, { exact: true }).first();
                     }
 
-                    await textLocator.waitFor({ state: 'visible', timeout: 8000 });
-                    await textLocator.click({ timeout: 5000 });
+                    await textLocator.waitFor({ state: 'visible', timeout: 5000 });
+                    await textLocator.click({ timeout: 3000 });
                     clicked = true;
                     console.log(`   ✅ Text-based selector succeeded`);
                   } catch (textError: any) {
@@ -383,6 +365,7 @@ export class TestExecutor {
         if (action.target) {
           try {
             const locator = this.getLocator(page, action.target);
+            await locator.waitFor({ state: 'visible', timeout: 5000 });
             await locator.fill(action.value);
           } catch (xpathError: any) {
             console.log(`   ⚠️ XPath locator failed: ${xpathError.message}`);
@@ -393,6 +376,7 @@ export class TestExecutor {
                 if (fallback.type === 'css') {
                   console.log(`   🔄 Trying CSS fallback: ${fallback.value}`);
                   const cssLocator = page.locator(fallback.value);
+                  await cssLocator.waitFor({ state: 'visible', timeout: 5000 });
                   await cssLocator.fill(action.value);
                   console.log(`   ✅ CSS fallback succeeded`);
                   return;

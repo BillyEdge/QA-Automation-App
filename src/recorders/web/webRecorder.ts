@@ -295,6 +295,16 @@ export class WebRecorder {
         description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
         objectId: objectId
       });
+
+      // Auto-insert wait steps for known elements that cause page navigation
+      if (objectData.id === 'btn_new_doc' || objectData.text?.includes('Add New')) {
+        console.log(`🕐 Auto-inserting wait after navigation-triggering button`);
+        await this.addAction({
+          type: ActionType.WAIT,
+          value: '2000',
+          description: 'Wait for page to load after navigation'
+        });
+      }
     });
 
     await this.page.exposeFunction('recordInput', async (objectData: any, value: string) => {
@@ -400,6 +410,16 @@ export class WebRecorder {
             description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
             objectId: objectId
           });
+
+          // Auto-insert wait steps for known elements that cause page navigation
+          if (objectData.id === 'btn_new_doc' || objectData.text?.includes('Add New')) {
+            console.log(`🕐 Auto-inserting wait after navigation-triggering button`);
+            await this.addAction({
+              type: ActionType.WAIT,
+              value: '2000',
+              description: 'Wait for page to load after navigation'
+            });
+          }
         });
 
         await newPage.exposeFunction('recordInput', async (objectData: any, value: string) => {

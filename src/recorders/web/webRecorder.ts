@@ -331,7 +331,7 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.CLICK,
-        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
+        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators, objectData),
         description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
         objectId: objectId
       });
@@ -355,7 +355,7 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.TYPE,
-        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
+        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators, objectData),
         value: value,
         description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
         objectId: objectId
@@ -447,7 +447,7 @@ export class WebRecorder {
 
           await this.addAction({
             type: ActionType.CLICK,
-            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
+            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators, objectData),
             description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
             objectId: objectId
           });
@@ -470,7 +470,7 @@ export class WebRecorder {
 
           await this.addAction({
             type: ActionType.TYPE,
-            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
+            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators, objectData),
             value: value,
             description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
             objectId: objectId
@@ -758,6 +758,26 @@ export class WebRecorder {
             return locators;
           };
 
+          // Helper function to detect if element is inside a table row and get row position
+          var getTableRowInfo = function(el) {
+            var parent = el;
+            var depth = 0;
+            while (parent && depth < 10) {
+              if (parent.tagName.toLowerCase() === 'tr') {
+                // Found table row - get its position
+                var tbody = parent.parentElement;
+                if (tbody && tbody.tagName.toLowerCase() === 'tbody') {
+                  var rows = Array.from(tbody.querySelectorAll('tr'));
+                  var rowIndex = rows.indexOf(parent) + 1; // 1-based index
+                  return { isInTable: true, rowIndex: rowIndex, rowElement: parent };
+                }
+              }
+              parent = parent.parentElement;
+              depth++;
+            }
+            return { isInTable: false };
+          };
+
           window.captureObjectData = function(element) {
             var attributes = {};
             for (var i = 0; i < element.attributes.length; i++) {
@@ -768,11 +788,19 @@ export class WebRecorder {
             var tagName = element.tagName.toLowerCase();
             var text = element.textContent ? element.textContent.trim() : '';
 
+            // Check if element is inside a table row
+            var tableInfo = getTableRowInfo(element);
+
             // Generate full XPath as primary (most reliable)
             var fullXPath = window.getFullXPath(element);
 
             // Generate multiple fallback locators
             var fallbackLocators = generateFallbackLocators(element);
+
+            // Mark in metadata if this is a table row element
+            if (tableInfo.isInTable) {
+              attributes['data-table-row-index'] = tableInfo.rowIndex;
+            }
 
             // Build primary CSS selector from best locator
             var primarySelector = '';
@@ -1243,11 +1271,28 @@ export class WebRecorder {
     return selectors.sort((a, b) => b.weight - a.weight);
   }
 
-  private async createLocator(selector: string, xpath?: string, fallbackLocators?: any[]): Promise<ElementLocator> {
+  private async createLocator(selector: string, xpath?: string, fallbackLocators?: any[], objectData?: any): Promise<ElementLocator> {
     // Ranorex-inspired multi-layer fallback strategy - prioritize ROBUST selectors!
     const fallbacks: any[] = [];
     let primaryXPath = xpath; // Start with full XPath as fallback
     let primaryType = 'xpath';
+
+    // SPECIAL CASE: Table Row Elements - use position-based selector!
+    if (objectData && objectData.attributes && objectData.attributes['data-table-row-index']) {
+      const rowIndex = objectData.attributes['data-table-row-index'];
+      // For table rows, use position-based selector (works for any document number)
+      primaryXPath = `(//table//tbody/tr//a[contains(@href, '/edit/')])[${rowIndex}]`;
+      const fallback2 = `//table//tbody/tr[${rowIndex}]//a[contains(@href, '/edit/')]`;
+      fallbacks.push({ type: 'xpath', value: fallback2 });
+      if (xpath) {
+        fallbacks.push({ type: 'xpath', value: xpath });
+      }
+      return {
+        type: 'xpath',
+        value: primaryXPath,
+        fallbacks: fallbacks
+      };
+    }
 
     // Step 1: Look for the BEST primary selector (ID, text, attributes)
     if (fallbackLocators && fallbackLocators.length > 0) {

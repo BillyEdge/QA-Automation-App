@@ -8,6 +8,7 @@ import * as path from 'path';
 interface ObjectRepositoryItem {
   id: string;
   name: string;
+  description?: string;
   tagName: string;
   attributes: { [key: string]: string };
   selectors: {
@@ -16,8 +17,26 @@ interface ObjectRepositoryItem {
     class?: string;
     xpath?: string;
     css?: string;
+    placeholder?: string;
+    ariLabel?: string;
   };
-  capturedAt: number;
+  // Ranorex-style selector ranking
+  selectorPriority: Array<{
+    type: 'id' | 'xpath' | 'css' | 'name' | 'placeholder' | 'aria-label' | 'text';
+    value: string;
+    reliability: number; // 0-100 score
+    weight: number; // Priority weight
+  }>;
+  // Metadata for smart matching
+  metadata: {
+    capturedAt: number;
+    usageCount: number;
+    successCount: number;
+    failureCount: number;
+    lastUsed?: number;
+  };
+  // Fingerprint for deduplication
+  fingerprint: string;
 }
 
 export class WebRecorder {
@@ -88,8 +107,8 @@ export class WebRecorder {
         console.log(`✅ Found existing test file!`);
         const existingTest = JSON.parse(fs.readFileSync(testFilePath, 'utf-8'));
         this.actions = existingTest.actions || [];
-        // Update testCaseId to match the found file
-        this.testCaseId = testFilePath.split('/').pop()?.replace('.json', '') || this.testCaseId;
+        // Update testCaseId to match the found file (extract just the filename without path)
+        this.testCaseId = path.basename(testFilePath, '.json');
         console.log(`✅ Loaded ${this.actions.length} existing actions - new actions will be appended`);
       } else {
         console.log(`⚠️ Continue flag set but no existing test found at ${testFilePath} - starting fresh`);
@@ -312,7 +331,7 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.CLICK,
-        target: await this.createLocator(objectData.selector, objectData.xpath),
+        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
         description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
         objectId: objectId
       });
@@ -336,7 +355,7 @@ export class WebRecorder {
 
       await this.addAction({
         type: ActionType.TYPE,
-        target: await this.createLocator(objectData.selector, objectData.xpath),
+        target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
         value: value,
         description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
         objectId: objectId
@@ -428,7 +447,7 @@ export class WebRecorder {
 
           await this.addAction({
             type: ActionType.CLICK,
-            target: await this.createLocator(objectData.selector, objectData.xpath),
+            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
             description: `Click on ${objectData.tagName} "${objectData.text || objectData.selector}"`,
             objectId: objectId
           });
@@ -451,7 +470,7 @@ export class WebRecorder {
 
           await this.addAction({
             type: ActionType.TYPE,
-            target: await this.createLocator(objectData.selector, objectData.xpath),
+            target: await this.createLocator(objectData.selector, objectData.xpath, objectData.fallbackLocators),
             value: value,
             description: `Type "${value}" into ${objectData.name || objectData.selector}"`,
             objectId: objectId
@@ -519,12 +538,67 @@ export class WebRecorder {
         console.log('🎯 Injecting event listeners for recording...');
         console.log('🔍 Checking exposed functions:', typeof window.recordClick, typeof window.recordInput);
 
-          // Helper function to generate full/absolute XPath with modal detection
+          // ADAPTIVE XPATH GENERATION (Ranorex-style)
+          // Generates stable XPath based on attributes, not positions
+          window.getAdaptiveXPath = function(element) {
+            var tagName = element.tagName.toLowerCase();
+
+            try {
+              // Try: Non-dynamic ID
+              if (element.id && !isDynamicId(element.id)) {
+                var idXPath = '//' + tagName + '[@id="' + element.id + '"]';
+                return idXPath;
+              }
+
+              // Try: data-testid
+              var dataTestid = element.getAttribute('data-testid');
+              if (dataTestid) {
+                return '//' + tagName + '[@data-testid="' + dataTestid + '"]';
+              }
+
+              // Try: aria-label
+              var ariaLabel = element.getAttribute('aria-label');
+              if (ariaLabel) {
+                return '//' + tagName + '[@aria-label="' + ariaLabel + '"]';
+              }
+
+              // Try: name attribute
+              var nameAttr = element.getAttribute('name');
+              if (nameAttr) {
+                return '//' + tagName + '[@name="' + nameAttr + '"]';
+              }
+
+              // Try: placeholder (for input elements)
+              var placeholderAttr = element.getAttribute('placeholder');
+              if (placeholderAttr && tagName === 'input') {
+                return '//input[@placeholder="' + placeholderAttr + '"]';
+              }
+
+              // Try: Text content (for buttons, links, etc)
+              var text = element.textContent ? element.textContent.trim() : '';
+              if (text && text.length > 0 && text.length < 100) {
+                if (tagName === 'button') {
+                  return '//button[contains(normalize-space(), "' + text + '")]';
+                } else if (tagName === 'a') {
+                  return '//a[contains(normalize-space(), "' + text + '")]';
+                }
+              }
+            } catch (e) {
+              console.error('Error in getAdaptiveXPath:', e);
+            }
+
+            // Fallback: use full positional XPath only as last resort
+            return window.getFullXPath(element);
+          };
+
+          // Helper function to generate full/absolute XPath with modal detection and text-based matching
           window.getFullXPath = function(element) {
-            if (element.id) {
-              // If element has ID, use short XPath
+            if (element.id && !isDynamicId(element.id)) {
+              // If element has a non-generated ID, use short XPath
               return '//' + element.tagName.toLowerCase() + '[@id="' + element.id + '"]';
             }
+
+            var tagName = element.tagName.toLowerCase();
 
             var path = '';
             var currentElement = element;
@@ -593,6 +667,97 @@ export class WebRecorder {
           };
 
           // Helper function to capture full object data
+          // RANOREX-INSPIRED ROBUST LOCATOR GENERATION
+          // Machine learning-based dynamic ID detection and multi-layer fallback strategy
+
+          // Helper function: Machine learning-based dynamic ID detection
+          var isDynamicId = function(id) {
+            if (!id) return false;
+
+            // Obvious framework-generated patterns
+            if (/^(__react|__id|_[a-z0-9]{8,}|react-select|form-control|collapsible|[a-z]+-\d{10,})/i.test(id)) {
+              return true;
+            }
+
+            // Pattern: mostly numbers/random chars (e.g., "5f3a2b1c")
+            if (/^[a-f0-9]{8,}$/i.test(id) || /^[a-z0-9]{16,}$/i.test(id)) {
+              return true;
+            }
+
+            // Pattern: UUID-like (e.g., "550e8400-e29b-41d4-a716-446655440000")
+            if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) {
+              return true;
+            }
+
+            // Pattern: Long numeric strings (e.g., "1761124714825")
+            if (/^\d{13,}$/.test(id)) {
+              return true;
+            }
+
+            // Pattern: element123, button456, etc. (auto-generated)
+            if (/^[a-z]+\d{3,}$/.test(id)) {
+              return true;
+            }
+
+            return false;
+          };
+
+          var isGeneratedClass = function(cls) {
+            return /^(css-|styles__|_|__|mc-|ant-|ui-|component-|form-|react-|swal-|select-)/i.test(cls);
+          };
+
+          var extractStableClasses = function(className) {
+            if (!className) return [];
+            return className.split(' ')
+              .filter(function(c) { return c && !isGeneratedClass(c); })
+              .slice(0, 2);
+          };
+
+          // Helper function: Generate multiple fallback locators (Ranorex-style)
+          var generateFallbackLocators = function(element) {
+            var locators = [];
+            var tagName = element.tagName.toLowerCase();
+
+            // Locator 1: Stable ID (if not dynamic)
+            if (element.id && !isDynamicId(element.id)) {
+              locators.push({ type: 'id', value: element.id, weight: 100 });
+            }
+
+            // Locator 2: data-testid (usually set by developers intentionally)
+            if (element.getAttribute('data-testid')) {
+              locators.push({ type: 'data-testid', value: element.getAttribute('data-testid'), weight: 95 });
+            }
+
+            // Locator 3: aria-label (explicit accessibility label)
+            if (element.getAttribute('aria-label')) {
+              locators.push({ type: 'aria-label', value: element.getAttribute('aria-label'), weight: 90 });
+            }
+
+            // Locator 4: name attribute (form elements)
+            if (element.getAttribute('name')) {
+              locators.push({ type: 'name', value: element.getAttribute('name'), weight: 85 });
+            }
+
+            // Locator 5: placeholder (input fields)
+            if (element.getAttribute('placeholder')) {
+              locators.push({ type: 'placeholder', value: element.getAttribute('placeholder'), weight: 80 });
+            }
+
+            // Locator 6: Text content (visible text - most user-centric)
+            var text = element.textContent ? element.textContent.trim() : '';
+            if (text && text.length > 0 && text.length < 100 && (tagName === 'button' || tagName === 'a')) {
+              locators.push({ type: 'text', value: text, weight: 75 });
+            }
+
+            // Locator 7: Stable classes
+            var stableClasses = extractStableClasses(element.className);
+            if (stableClasses.length > 0) {
+              locators.push({ type: 'class', value: stableClasses.join(' '), weight: 60 });
+            }
+
+            return locators;
+          };
+
           window.captureObjectData = function(element) {
             var attributes = {};
             for (var i = 0; i < element.attributes.length; i++) {
@@ -600,91 +765,53 @@ export class WebRecorder {
               attributes[attr.name] = attr.value;
             }
 
+            var tagName = element.tagName.toLowerCase();
             var text = element.textContent ? element.textContent.trim() : '';
-            var selector = '';
-            var xpath = '';
 
-            // Always generate full XPath for maximum reliability
+            // Generate full XPath as primary (most reliable)
             var fullXPath = window.getFullXPath(element);
 
-            // ALWAYS use full XPath for maximum reliability
-            xpath = fullXPath;
+            // Generate multiple fallback locators
+            var fallbackLocators = generateFallbackLocators(element);
 
-            // Generate CSS selector for fallback (React-aware)
-            // Priority order: id > data-testid > aria-label > name > placeholder > text > stable classes > tag
-
-            var tagName = element.tagName.toLowerCase();
-
-            // Helper function to detect generated IDs and classes
-            var isGeneratedId = function(id) {
-              return /^(__react|__id|_)/i.test(id);
-            };
-
-            var isGeneratedAttribute = function(value) {
-              return /^(styles__|css-|_|__)/i.test(value);
-            };
-
-            var isGeneratedClass = function(cls) {
-              return /^(css-|styles__|_|__)/i.test(cls) || /^(mc-|ant-|ui-|component-)/i.test(cls);
-            };
-
-            var extractStableClasses = function(className) {
-              if (!className) return [];
-              return className.split(' ')
-                .filter(function(c) { return c && !isGeneratedClass(c); })
-                .slice(0, 2);
-            };
-
-            // Priority 1: ID (if not generated)
-            if (element.id && !isGeneratedId(element.id)) {
-              selector = '#' + element.id;
-            }
-            // Priority 2: data-testid
-            else if (element.getAttribute('data-testid')) {
-              selector = '[data-testid="' + element.getAttribute('data-testid') + '"]';
-            }
-            // Priority 3: aria-label
-            else if (element.getAttribute('aria-label')) {
-              selector = '[aria-label="' + element.getAttribute('aria-label') + '"]';
-            }
-            // Priority 4: name attribute
-            else if (element.getAttribute('name') && !isGeneratedAttribute(element.getAttribute('name'))) {
-              selector = tagName + '[name="' + element.getAttribute('name') + '"]';
-            }
-            // Priority 5: placeholder
-            else if (element.getAttribute('placeholder')) {
-              selector = tagName + '[placeholder="' + element.getAttribute('placeholder') + '"]';
-            }
-            // Priority 6: type attribute for inputs
-            else if (element.getAttribute('type') && tagName === 'input') {
-              selector = tagName + '[type="' + element.getAttribute('type') + '"]';
-            }
-            // Priority 7: stable classes
-            else if (element.className && typeof element.className === 'string') {
-              var stableClasses = extractStableClasses(element.className);
-              if (stableClasses.length > 0) {
-                selector = tagName + '.' + stableClasses.join('.');
+            // Build primary CSS selector from best locator
+            var primarySelector = '';
+            if (fallbackLocators.length > 0) {
+              var bestLocator = fallbackLocators[0];
+              if (bestLocator.type === 'id') {
+                primarySelector = '#' + bestLocator.value;
+              } else if (bestLocator.type === 'data-testid') {
+                primarySelector = '[data-testid="' + bestLocator.value + '"]';
+              } else if (bestLocator.type === 'aria-label') {
+                primarySelector = '[aria-label="' + bestLocator.value + '"]';
+              } else if (bestLocator.type === 'name') {
+                primarySelector = tagName + '[name="' + bestLocator.value + '"]';
+              } else if (bestLocator.type === 'placeholder') {
+                primarySelector = 'input[placeholder="' + bestLocator.value + '"]';
+              } else if (bestLocator.type === 'text') {
+                primarySelector = tagName + ':not(svg):not(script)';
+              } else if (bestLocator.type === 'class') {
+                primarySelector = tagName + '.' + bestLocator.value.replace(/ /g, '.');
               } else {
-                selector = tagName;
+                primarySelector = tagName;
               }
-            }
-            // Priority 8: fallback to tag name
-            else {
-              selector = tagName;
+            } else {
+              primarySelector = tagName;
             }
 
             return {
               id: element.id || null,
               name: element.getAttribute('name') || null,
               className: element.className || null,
-              tagName: element.tagName.toLowerCase(),
-              text: text.substring(0, 50),
+              tagName: tagName,
+              text: text.substring(0, 100),
               value: element.value || null,
               placeholder: element.getAttribute('placeholder') || null,
               type: element.getAttribute('type') || null,
-              selector: selector,
+              selector: primarySelector,
               attributes: attributes,
-              xpath: xpath // Generated XPath for better element matching
+              xpath: fullXPath, // Use full XPath (more reliable)
+              fallbackLocators: fallbackLocators // Multi-layer fallback for executor
             };
           };
 
@@ -740,9 +867,26 @@ export class WebRecorder {
             var target = e.target;
             if (target.id === 'qa-recorder-overlay' || target.closest('#qa-recorder-overlay')) return;
 
-            // Find the actual interactive element (not nested children)
-            var interactiveElement = findInteractiveElement(target);
-            var objectData = window.captureObjectData(interactiveElement);
+            // Try to find the actual interactive element if target is not interactive
+            var actualTarget = target;
+            var isInteractiveTag = /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/i.test(target.tagName);
+
+            if (!isInteractiveTag && !target.classList.contains('btn')) {
+              // Walk up the DOM to find an interactive parent (limited to 5 levels)
+              var parent = target.parentElement;
+              for (var i = 0; i < 5 && parent; i++) {
+                var isParentInteractive = /^(BUTTON|A|INPUT|SELECT|TEXTAREA)$/i.test(parent.tagName) ||
+                                         parent.classList.contains('btn');
+                if (isParentInteractive) {
+                  actualTarget = parent;
+                  break;
+                }
+                parent = parent.parentElement;
+              }
+            }
+
+            // Capture the clicked element directly
+            var objectData = window.captureObjectData(actualTarget);
 
             console.log('📌 Click detected on: ' + objectData.tagName + ' - ' + objectData.text);
             console.log('   📦 Object - ID: ' + objectData.id + ', Name: ' + objectData.name + ', Class: ' + objectData.className);
@@ -828,9 +972,16 @@ export class WebRecorder {
     // Create new object
     const objectId = `obj_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
+    // Generate Ranorex-style fingerprint for smart deduplication
+    const fingerprint = this.generateObjectFingerprint(objectData);
+
+    // Build selector priority array (Ranorex-style ranking)
+    const selectorPriority = this.buildSelectorPriority(objectData);
+
     const obj: ObjectRepositoryItem = {
       id: objectId,
       name: objectData.name || objectData.text || objectData.selector,
+      description: `${objectData.tagName} element - ${objectData.text || objectData.selector}`,
       tagName: objectData.tagName,
       attributes: objectData.attributes || {},
       selectors: {
@@ -838,13 +989,24 @@ export class WebRecorder {
         name: objectData.name,
         class: objectData.className,
         xpath: objectData.xpath || this.generateXPath(objectData),
-        css: objectData.selector
+        css: objectData.selector,
+        placeholder: objectData.placeholder,
+        ariLabel: objectData.attributes?.['aria-label']
       },
-      capturedAt: Date.now()
+      selectorPriority: selectorPriority,
+      metadata: {
+        capturedAt: Date.now(),
+        usageCount: 0,
+        successCount: 0,
+        failureCount: 0
+      },
+      fingerprint: fingerprint
     };
 
     this.objectRepository.set(objectId, obj);
     console.log(`📦 New object stored: ${obj.name} (${objectId})`);
+    console.log(`   🔍 Fingerprint: ${fingerprint}`);
+    console.log(`   ⭐ Top selectors: ${selectorPriority.slice(0, 3).map(s => `${s.type}(${s.reliability}%)`).join(', ')}`);
 
     return objectId;
   }
@@ -958,20 +1120,166 @@ export class WebRecorder {
     return str.replace(/'/g, "&apos;");
   }
 
-  private async createLocator(selector: string, xpath?: string): Promise<ElementLocator> {
-    // Prefer XPath for text-based elements (more reliable for dropdowns/menus)
-    // Fallback to CSS if XPath is not available
+  private generateObjectFingerprint(objectData: any): string {
+    // Ranorex-style fingerprint for smart deduplication
+    // Creates a unique but forgiving signature that can match similar objects
+    const parts: string[] = [];
+
+    // Primary: tag name (always included)
+    parts.push(`tag:${objectData.tagName}`);
+
+    // Secondary: stable attributes (in priority order)
+    if (objectData.id && !this.isGeneratedId(objectData.id)) {
+      parts.push(`id:${objectData.id}`);
+    }
+
+    if (objectData.placeholder) {
+      parts.push(`placeholder:${objectData.placeholder.substring(0, 20)}`);
+    }
+
+    if (objectData.name) {
+      parts.push(`name:${objectData.name.substring(0, 20)}`);
+    }
+
+    // Text content (first 30 chars for buttons/links)
+    if (objectData.text && (objectData.tagName === 'button' || objectData.tagName === 'a')) {
+      parts.push(`text:${objectData.text.substring(0, 30)}`);
+    }
+
+    // Generate hash-like fingerprint
+    return parts.join('|');
+  }
+
+  private buildSelectorPriority(objectData: any): Array<{
+    type: 'id' | 'xpath' | 'css' | 'name' | 'placeholder' | 'aria-label' | 'text';
+    value: string;
+    reliability: number;
+    weight: number;
+  }> {
+    const selectors = [];
+    const tagName = objectData.tagName;
+
+    // 1. Non-generated ID (highest reliability)
+    if (objectData.id && !this.isGeneratedId(objectData.id)) {
+      selectors.push({
+        type: 'id' as const,
+        value: objectData.id,
+        reliability: 100,
+        weight: 100
+      });
+    }
+
+    // 2. data-testid (very reliable)
+    if (objectData.attributes?.['data-testid']) {
+      selectors.push({
+        type: 'xpath' as const,
+        value: `//${tagName}[@data-testid="${objectData.attributes['data-testid']}"]`,
+        reliability: 95,
+        weight: 95
+      });
+    }
+
+    // 3. aria-label (reliable for accessible elements)
+    if (objectData.attributes?.['aria-label']) {
+      selectors.push({
+        type: 'aria-label' as const,
+        value: objectData.attributes['aria-label'],
+        reliability: 90,
+        weight: 90
+      });
+    }
+
+    // 4. Placeholder (for input fields)
+    if (objectData.placeholder) {
+      selectors.push({
+        type: 'placeholder' as const,
+        value: objectData.placeholder,
+        reliability: 85,
+        weight: 85
+      });
+    }
+
+    // 5. Name attribute (for form elements)
+    if (objectData.name && !this.isGeneratedAttribute(objectData.name)) {
+      selectors.push({
+        type: 'name' as const,
+        value: objectData.name,
+        reliability: 85,
+        weight: 85
+      });
+    }
+
+    // 6. Text content (for buttons, links)
+    if (objectData.text && (tagName === 'button' || tagName === 'a' || tagName === 'label')) {
+      selectors.push({
+        type: 'text' as const,
+        value: objectData.text,
+        reliability: 80,
+        weight: 80
+      });
+    }
+
+    // 7. Full XPath (fallback)
+    if (objectData.xpath) {
+      selectors.push({
+        type: 'xpath' as const,
+        value: objectData.xpath,
+        reliability: 70,
+        weight: 70
+      });
+    }
+
+    // 8. CSS selector (last resort)
+    if (objectData.selector) {
+      selectors.push({
+        type: 'css' as const,
+        value: objectData.selector,
+        reliability: 60,
+        weight: 60
+      });
+    }
+
+    // Sort by weight (descending)
+    return selectors.sort((a, b) => b.weight - a.weight);
+  }
+
+  private async createLocator(selector: string, xpath?: string, fallbackLocators?: any[]): Promise<ElementLocator> {
+    // Ranorex-inspired multi-layer fallback strategy
+    const fallbacks: any[] = [];
+
+    // Always include CSS selector as a fallback
+    if (selector && selector !== xpath) {
+      fallbacks.push({ type: 'css', value: selector });
+    }
+
+    // Add additional fallback locators generated from element attributes
+    if (fallbackLocators && fallbackLocators.length > 1) {
+      for (let i = 1; i < fallbackLocators.length && fallbacks.length < 3; i++) {
+        const locator = fallbackLocators[i];
+        if (locator.type === 'id') {
+          fallbacks.push({ type: 'xpath', value: `//*[@id="${locator.value}"]` });
+        } else if (locator.type === 'data-testid') {
+          fallbacks.push({ type: 'xpath', value: `//*[@data-testid="${locator.value}"]` });
+        } else if (locator.type === 'name') {
+          fallbacks.push({ type: 'xpath', value: `//*[@name="${locator.value}"]` });
+        } else if (locator.type === 'text') {
+          fallbacks.push({ type: 'xpath', value: `//button[contains(text(), "${locator.value}")] | //a[contains(text(), "${locator.value}")]` });
+        }
+      }
+    }
+
+    // Prefer XPath as primary locator (more reliable for complex elements)
     if (xpath) {
       return {
         type: 'xpath',
         value: xpath,
-        fallbacks: [{ type: 'css', value: selector }]
+        fallbacks: fallbacks
       };
     } else {
       return {
         type: 'css',
         value: selector,
-        fallbacks: []
+        fallbacks: fallbacks
       };
     }
   }

@@ -72,6 +72,10 @@ namespace QAAutomationUI
             {
                 InitializeComponent();
 
+                // Auto-cleanup: Kill stale automation browser processes on startup
+                CleanupAutomationBrowser();
+
+
                 // Use node to run the backend instead of packaged exe (to avoid pkg bundling issues)
                 string nodeExe = "node"; // Assumes node is in PATH
                 string distPath = Path.Combine(Directory.GetCurrentDirectory(), "dist", "index.js");
@@ -2836,6 +2840,50 @@ namespace QAAutomationUI
             catch (Exception ex)
             {
                 AppendOutput($"❌ Error saving test cases order: {ex.Message}\n");
+            }
+        }
+
+        /// <summary>
+        /// Cleanup stale automation browser processes on startup
+        /// This ensures fresh event listeners and prevents recording conflicts
+        /// </summary>
+        private void CleanupAutomationBrowser()
+        {
+            try
+            {
+                // Kill headless/test browser instances
+                var processNamesToKill = new[] { "chromium", "msedgedriver" };
+
+                foreach (var processName in processNamesToKill)
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "taskkill",
+                            Arguments = $"/IM {processName}.exe /F",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            CreateNoWindow = true
+                        })?.WaitForExit();
+                    }
+                    catch
+                    {
+                        // Process might not be running, that's fine
+                    }
+                }
+
+                // Delete stale CDP endpoint file
+                string endpointFile = Path.Combine(Directory.GetCurrentDirectory(), ".browser-cdp-endpoint");
+                if (File.Exists(endpointFile))
+                {
+                    File.Delete(endpointFile);
+                    Console.WriteLine("🧹 Cleaned up stale browser endpoint");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ Cleanup warning (non-critical): {ex.Message}");
             }
         }
     }

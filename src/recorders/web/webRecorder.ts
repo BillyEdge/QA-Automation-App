@@ -1282,7 +1282,29 @@ export class WebRecorder {
       else if (bestLocator.type === 'text') {
         // Generate text-based XPath for buttons and links
         const textValue = bestLocator.value;
-        primaryXPath = `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')] | //*[contains(text(), '${textValue}')]`;
+
+        // Check if we have class information in the fallback locators for refinement
+        let classValue = '';
+        if (fallbackLocators.length > 1) {
+          const classLocator = fallbackLocators.find((l: any) => l.type === 'class');
+          if (classLocator) {
+            classValue = classLocator.value;
+          }
+        }
+
+        // Prioritize: Text + Class (most precise) > Text only
+        if (classValue) {
+          // Extract key class names (btn-success, btn-danger, etc.)
+          const keyClasses = classValue.split(' ').filter((c: string) => c.includes('btn-'));
+          if (keyClasses.length > 0) {
+            const classConditions = keyClasses.map((c: string) => `contains(@class, '${c}')`).join(' and ');
+            primaryXPath = `//button[contains(text(), '${textValue}') and ${classConditions}] | //a[contains(text(), '${textValue}') and ${classConditions}]`;
+          } else {
+            primaryXPath = `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')] | //*[contains(text(), '${textValue}')]`;
+          }
+        } else {
+          primaryXPath = `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')] | //*[contains(text(), '${textValue}')]`;
+        }
         primaryType = 'xpath';
       }
       // Priority 7: CSS classes (if no better option)
@@ -1306,7 +1328,19 @@ export class WebRecorder {
           fallbacks.push({ type: 'css', value: `input[placeholder="${locator.value}"]` });
         } else if (locator.type === 'text') {
           const textValue = locator.value;
-          fallbacks.push({ type: 'xpath', value: `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')]` });
+          // Check for class information to add to text-based selector
+          const classLoc = fallbackLocators.find((l: any) => l.type === 'class');
+          if (classLoc) {
+            const keyClasses = classLoc.value.split(' ').filter((c: string) => c.includes('btn-'));
+            if (keyClasses.length > 0) {
+              const classConditions = keyClasses.map((c: string) => `contains(@class, '${c}')`).join(' and ');
+              fallbacks.push({ type: 'xpath', value: `//button[contains(text(), '${textValue}') and ${classConditions}] | //a[contains(text(), '${textValue}') and ${classConditions}]` });
+            } else {
+              fallbacks.push({ type: 'xpath', value: `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')]` });
+            }
+          } else {
+            fallbacks.push({ type: 'xpath', value: `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')]` });
+          }
         } else if (locator.type === 'class') {
           fallbacks.push({ type: 'css', value: selector });
         }

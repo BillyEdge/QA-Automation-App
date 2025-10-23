@@ -1244,15 +1244,55 @@ export class WebRecorder {
   }
 
   private async createLocator(selector: string, xpath?: string, fallbackLocators?: any[]): Promise<ElementLocator> {
-    // Ranorex-inspired multi-layer fallback strategy
+    // Ranorex-inspired multi-layer fallback strategy - prioritize ROBUST selectors!
     const fallbacks: any[] = [];
+    let primaryXPath = xpath; // Start with full XPath as fallback
+    let primaryType = 'xpath';
 
-    // Always include CSS selector as a fallback
-    if (selector && selector !== xpath) {
-      fallbacks.push({ type: 'css', value: selector });
+    // Step 1: Look for the BEST primary selector (ID, text, attributes)
+    if (fallbackLocators && fallbackLocators.length > 0) {
+      const bestLocator = fallbackLocators[0];
+
+      // Priority 1: ID-based (most stable)
+      if (bestLocator.type === 'id') {
+        primaryXPath = `//*[@id="${bestLocator.value}"]`;
+        primaryType = 'xpath';
+      }
+      // Priority 2: data-testid (stable, intended for testing)
+      else if (bestLocator.type === 'data-testid') {
+        primaryXPath = `//*[@data-testid="${bestLocator.value}"]`;
+        primaryType = 'xpath';
+      }
+      // Priority 3: aria-label (semantic, stable)
+      else if (bestLocator.type === 'aria-label') {
+        primaryXPath = `//*[@aria-label="${bestLocator.value}"]`;
+        primaryType = 'xpath';
+      }
+      // Priority 4: name attribute (stable)
+      else if (bestLocator.type === 'name') {
+        primaryXPath = `//*[@name="${bestLocator.value}"]`;
+        primaryType = 'xpath';
+      }
+      // Priority 5: placeholder (stable for inputs)
+      else if (bestLocator.type === 'placeholder') {
+        primaryXPath = `//input[@placeholder="${bestLocator.value}"]`;
+        primaryType = 'xpath';
+      }
+      // Priority 6: text content (user-centric, more stable than position)
+      else if (bestLocator.type === 'text') {
+        // Generate text-based XPath for buttons and links
+        const textValue = bestLocator.value;
+        primaryXPath = `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')] | //*[contains(text(), '${textValue}')]`;
+        primaryType = 'xpath';
+      }
+      // Priority 7: CSS classes (if no better option)
+      else if (bestLocator.type === 'class') {
+        primaryType = 'css';
+        primaryXPath = selector;
+      }
     }
 
-    // Add additional fallback locators generated from element attributes
+    // Step 2: Build fallback chain with remaining locators
     if (fallbackLocators && fallbackLocators.length > 1) {
       for (let i = 1; i < fallbackLocators.length && fallbacks.length < 3; i++) {
         const locator = fallbackLocators[i];
@@ -1262,26 +1302,32 @@ export class WebRecorder {
           fallbacks.push({ type: 'xpath', value: `//*[@data-testid="${locator.value}"]` });
         } else if (locator.type === 'name') {
           fallbacks.push({ type: 'xpath', value: `//*[@name="${locator.value}"]` });
+        } else if (locator.type === 'placeholder') {
+          fallbacks.push({ type: 'css', value: `input[placeholder="${locator.value}"]` });
         } else if (locator.type === 'text') {
-          fallbacks.push({ type: 'xpath', value: `//button[contains(text(), "${locator.value}")] | //a[contains(text(), "${locator.value}")]` });
+          const textValue = locator.value;
+          fallbacks.push({ type: 'xpath', value: `//button[contains(text(), '${textValue}')] | //a[contains(text(), '${textValue}')]` });
+        } else if (locator.type === 'class') {
+          fallbacks.push({ type: 'css', value: selector });
         }
       }
     }
 
-    // Prefer XPath as primary locator (more reliable for complex elements)
-    if (xpath) {
-      return {
-        type: 'xpath',
-        value: xpath,
-        fallbacks: fallbacks
-      };
-    } else {
-      return {
-        type: 'css',
-        value: selector,
-        fallbacks: fallbacks
-      };
+    // Step 3: Always add full XPath as LAST fallback for robustness
+    if (xpath && primaryXPath !== xpath) {
+      fallbacks.push({ type: 'xpath', value: xpath });
     }
+
+    // Step 4: Always include CSS selector as fallback if we have it
+    if (selector && selector !== primaryXPath && primaryType === 'xpath') {
+      fallbacks.push({ type: 'css', value: selector });
+    }
+
+    return {
+      type: primaryType as 'xpath' | 'css',
+      value: primaryXPath,
+      fallbacks: fallbacks
+    };
   }
 
   private async addAction(actionData: Partial<TestAction>): Promise<void> {
